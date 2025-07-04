@@ -1,5 +1,6 @@
 import os
 import torch
+import dataclasses
 import torch.optim as optim
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -528,7 +529,7 @@ class Trainer:
                     'D_state_dict': self.D.state_dict(),
                     'optG_state_dict': self.optG.state_dict(),
                     'optD_state_dict': self.optD.state_dict(),
-                    'config': OmegaConf.to_container(self.config, resolve=True)  # Save config as dict
+                    'config': dataclasses.asdict(self.config)  # Save config as dict
                 }
                 if self.model_architecture == "gan6_gat_cnn" and self.E is not None and self.optE is not None:
                     checkpoint_data['E_state_dict'] = self.E.state_dict()
