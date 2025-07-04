@@ -13,10 +13,24 @@ from src.utils import (
     save_checkpoint, load_checkpoint, setup_wandb, log_to_wandb,
     denormalize_image # To convert [-1,1] to [0,1] for logging images
 )
+import shutil # For FID image directory handling
+from PIL import Image # For saving images for FID
+
+# Attempt to import pytorch_fid, if not available, FID calculation will be disabled.
+try:
+    from pytorch_fid.fid_score import calculate_fid_given_paths
+except ImportError:
+    calculate_fid_given_paths = None
+    print("Warning: pytorch-fid not found. FID calculation will be disabled. "
+          "Install with: pip install pytorch-fid")
+
 
 class Trainer:
     def __init__(self, config):
         self.config = config
+        if calculate_fid_given_paths is None:
+            self.config.enable_fid_calculation = False # Disable if library not found
+            print("FID calculation has been disabled because pytorch-fid is not installed.")
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
 
@@ -54,7 +68,34 @@ class Trainer:
 
         self.current_epoch = 0
         self.current_step = 0
-        # TODO: Implement checkpoint loading if resume is enabled
+
+        self.fid_temp_real_path = os.path.join(self.config.output_dir_run, "fid_real_images_temp")
+        self.fid_temp_fake_path = os.path.join(self.config.output_dir_run, "fid_fake_images_temp")
+
+        if self.config.resume_checkpoint_path and os.path.exists(self.config.resume_checkpoint_path):
+            self.load_training_checkpoint(self.config.resume_checkpoint_path)
+        else:
+            if self.config.resume_checkpoint_path: # Path given but not found
+                 print(f"Warning: resume_checkpoint_path '{self.config.resume_checkpoint_path}' not found. Starting from scratch.")
+            self.current_epoch = 0
+            self.current_step = 0
+
+
+    def load_training_checkpoint(self, checkpoint_path):
+        """Loads G, D, optimizers, epoch, and step from a checkpoint."""
+        start_epoch, current_step = load_checkpoint(
+            checkpoint_path,
+            self.G, self.D,
+            self.optG, self.optD,
+            self.device
+        )
+        # The trainer loop starts from self.current_epoch, so if a checkpoint was saved
+        # at the end of epoch N (meaning N epochs completed), we want to start the next epoch, N+1.
+        # load_checkpoint returns the epoch number that was *completed*.
+        self.current_epoch = start_epoch +1
+        self.current_step = current_step
+        print(f"Resumed from checkpoint. Starting next epoch: {self.current_epoch}. Current step: {self.current_step}")
+
 
     def _prepare_fixed_sample_batch(self):
         """Prepares a fixed batch of data for consistent sample generation."""
@@ -246,6 +287,171 @@ class Trainer:
 
             if epoch % self.config.sample_freq_epoch == 0:
                 self.generate_samples(epoch, self.current_step)
+
+            if epoch % self.config.checkpoint_freq_epoch == 0 or epoch == self.config.num_epochs - 1:
+                checkpoint_path = os.path.join(self.checkpoints_dir, f"checkpoint_epoch_{epoch:04d}.pth.tar")
+                save_checkpoint({
+                    'epoch': epoch,
+                    'step': self.current_step,
+                    'G_state_dict': self.G.state_dict(),
+                    'D_state_dict': self.D.state_dict(),
+                    'optG_state_dict': self.optG.state_dict(),
+                    'optD_state_dict': self.optD.state_dict(),
+                    'config': self.config # Save config with checkpoint
+                }, is_best=False, filename=checkpoint_path) # 'is_best' logic can be added if there's a validation metric
+                print(f"Checkpoint saved to {checkpoint_path}")
+
+        print("Training finished.")
+        if self.wandb_run:
+            self.wandb_run.finish()
+
+    def _save_images_for_fid(self, images_tensor, base_path, num_images_to_save):
+        """Saves a batch of image tensors to a directory for FID calculation."""
+        os.makedirs(base_path, exist_ok=True)
+        images_tensor = denormalize_image(images_tensor) # [-1,1] to [0,1]
+        for i in range(min(images_tensor.size(0), num_images_to_save)):
+            image = images_tensor[i]
+            # Convert to PIL Image and save
+            # torchvision.transforms.ToPILImage()(image.cpu()).save(os.path.join(base_path, f"img_{i}.png"))
+            # Using vutils.save_image for single image:
+            vutils.save_image(image.cpu(), os.path.join(base_path, f"img_{i}.png"), normalize=False)
+
+
+    def calculate_fid_score(self):
+        """Calculates FID score between generated images and real images."""
+        if not self.config.enable_fid_calculation or calculate_fid_given_paths is None:
+            print("FID calculation skipped (either disabled or pytorch-fid not installed).")
+            return float('nan')
+
+        print("Calculating FID score...")
+        self.G.eval()
+
+        # Clean up previous FID image directories
+        if os.path.exists(self.fid_temp_real_path):
+            shutil.rmtree(self.fid_temp_real_path)
+        if os.path.exists(self.fid_temp_fake_path):
+            shutil.rmtree(self.fid_temp_fake_path)
+        os.makedirs(self.fid_temp_real_path, exist_ok=True)
+        os.makedirs(self.fid_temp_fake_path, exist_ok=True)
+
+        num_fid_images = self.config.fid_num_images
+        fid_batch_size = self.config.fid_batch_size
+
+        # --- Generate and save fake images ---
+        print(f"Generating {num_fid_images} fake images for FID...")
+        generated_count = 0
+        # Use a temporary dataloader for generating fake images, as G needs real image structures
+        # (segments, adj) if the GAN architecture requires them (like gan5).
+        # We can use the existing self.dataloader but iterate without shuffle.
+        temp_dataloader_for_g_inputs = get_dataloader(self.config, shuffle=False)
+
+        pbar_fake = tqdm(total=num_fid_images, desc="Generating Fake FID Images")
+        for batch_data in temp_dataloader_for_g_inputs:
+            if generated_count >= num_fid_images:
+                break
+
+            real_images_batch = batch_data["image"].to(self.device) # Used for structure by G
+            segments_map_batch = batch_data["segments"].to(self.device)
+            adj_matrix_batch = batch_data["adj"].to(self.device)
+
+            current_gen_batch_size = min(fid_batch_size, real_images_batch.size(0))
+            # Ensure we don't generate more than num_fid_images in total
+            current_gen_batch_size = min(current_gen_batch_size, num_fid_images - generated_count)
+            if current_gen_batch_size <= 0: break
+
+
+            z = torch.randn(current_gen_batch_size, self.config.z_dim, device=self.device)
+
+            with torch.no_grad():
+                fake_images = self.G(z,
+                                     real_images_batch[:current_gen_batch_size],
+                                     segments_map_batch[:current_gen_batch_size],
+                                     adj_matrix_batch[:current_gen_batch_size])
+
+            # Save these fake images
+            for i in range(fake_images.size(0)):
+                if generated_count < num_fid_images:
+                    img_tensor = denormalize_image(fake_images[i].cpu())
+                    vutils.save_image(img_tensor, os.path.join(self.fid_temp_fake_path, f"fake_{generated_count}.png"), normalize=False)
+                    generated_count += 1
+                    pbar_fake.update(1)
+                else:
+                    break
+        pbar_fake.close()
+        if generated_count < num_fid_images:
+            print(f"Warning: Only generated {generated_count}/{num_fid_images} fake images for FID due to dataset size.")
+
+
+        # --- Save real images ---
+        # TODO: Implement option for config.path_to_real_images_for_fid
+        # For now, use images from the current dataset.
+        print(f"Saving {num_fid_images} real images for FID...")
+        saved_real_count = 0
+        real_dataloader_for_fid = get_dataloader(self.config, shuffle=False) # Fresh dataloader
+
+        pbar_real = tqdm(total=num_fid_images, desc="Saving Real FID Images")
+        for batch_data in real_dataloader_for_fid:
+            if saved_real_count >= num_fid_images:
+                break
+            real_images_batch = batch_data["image"].to(self.device) # These are already normalized [-1,1]
+
+            for i in range(real_images_batch.size(0)):
+                if saved_real_count < num_fid_images:
+                    img_tensor = denormalize_image(real_images_batch[i].cpu()) # Denorm to [0,1]
+                    vutils.save_image(img_tensor, os.path.join(self.fid_temp_real_path, f"real_{saved_real_count}.png"), normalize=False)
+                    saved_real_count += 1
+                    pbar_real.update(1)
+                else:
+                    break
+        pbar_real.close()
+        if saved_real_count < num_fid_images:
+             print(f"Warning: Only saved {saved_real_count}/{num_fid_images} real images for FID due to dataset size.")
+
+
+        # --- Calculate FID ---
+        if generated_count == 0 or saved_real_count == 0:
+            print("Not enough images generated/saved for FID calculation. Skipping.")
+            self.G.train()
+            return float('nan')
+
+        try:
+            # FID calculation expects images in range [0, 255], uint8, but pytorch-fid handles [0,1] float PNGs.
+            # The images saved by vutils.save_image(tensor, normalize=False) with input tensor in [0,1] are suitable.
+            fid_value = calculate_fid_given_paths(
+                paths=[self.fid_temp_real_path, self.fid_temp_fake_path],
+                batch_size=fid_batch_size, # Batch size for Inception model processing
+                device=self.device,
+                dims=2048, # Standard InceptionV3 feature dimension for FID
+                num_workers=self.config.num_workers
+            )
+            print(f"FID Score: {fid_value:.4f}")
+        except Exception as e:
+            print(f"Error calculating FID: {e}")
+            fid_value = float('nan')
+
+        # Clean up temporary directories
+        # shutil.rmtree(self.fid_temp_real_path)
+        # shutil.rmtree(self.fid_temp_fake_path)
+        # print("Cleaned up temporary FID image directories.")
+        # It might be useful to keep these directories for inspection, so cleanup is commented out.
+
+        self.G.train() # Set generator back to training mode
+        return fid_value
+
+    def train(self):
+        print("Starting training...")
+        for epoch in range(self.current_epoch, self.config.num_epochs):
+            self.current_epoch = epoch
+            self.train_epoch()
+
+            if epoch % self.config.sample_freq_epoch == 0:
+                self.generate_samples(epoch, self.current_step)
+
+            if self.config.enable_fid_calculation and epoch > 0 and \
+               (epoch % self.config.fid_freq_epoch == 0 or epoch == self.config.num_epochs - 1):
+                fid_score = self.calculate_fid_score()
+                log_to_wandb(self.wandb_run, {"FID_Score": fid_score}, step=self.current_step)
+
 
             if epoch % self.config.checkpoint_freq_epoch == 0 or epoch == self.config.num_epochs - 1:
                 checkpoint_path = os.path.join(self.checkpoints_dir, f"checkpoint_epoch_{epoch:04d}.pth.tar")

@@ -63,9 +63,16 @@ class BaseConfig:
     num_samples_to_log: int = 10 # Number of samples for image logging
     checkpoint_freq_epoch: int = 10 # Save checkpoints every N epochs
     # For FID calculation (if implemented later)
-    # fid_incep_path: str = "path/to/inception_v3_fid.pt"
-    # fid_batch_size: int = 32
-    # fid_num_images: int = 5000
+    # fid_incep_path: str = "path/to/inception_v3_fid.pt" # Not used if using pytorch-fid's default
+    fid_num_images: int = 5000 # Number of real/fake images to use for FID
+    fid_batch_size: int = 32   # Batch size for generating images for FID
+    fid_freq_epoch: int = 5    # How often (in epochs) to calculate FID. Can be expensive.
+    # path_to_real_images_for_fid: str = None # Optional: path to a pre-selected dir of real images for FID consistency. If None, uses current dataset.
+    # enable_fid_calculation: bool = False # Set to True in experiment YAML to enable
+    enable_fid_calculation: bool = True # Default to True, can be disabled in YAML.
+
+    # --- Resume Training ---
+    resume_checkpoint_path: str = None # Path to a .pth.tar checkpoint file to resume training
 
     # --- Output Directory Management ---
     # This will be the actual directory for this specific run's outputs

@@ -21,6 +21,12 @@ def main():
         help="Path to the experiment configuration YAML file."
     )
     parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help="Path to a checkpoint file (.pth.tar) to resume training from. Overrides 'resume_checkpoint_path' in config file."
+    )
+    parser.add_argument(
         "overrides",
         nargs="*",
         help="Any key=value arguments to override config parameters (e.g., batch_size=32 num_epochs=100)."
@@ -45,6 +51,11 @@ def main():
         cli_overrides = OmegaConf.from_dotlist(args.overrides)
         config = OmegaConf.merge(config, cli_overrides)
         print(f"Applied CLI overrides: {args.overrides}")
+
+    # If --resume_from is provided via CLI, it takes precedence
+    if args.resume_from:
+        config.resume_checkpoint_path = args.resume_from
+        print(f"CLI override: Resuming from checkpoint: {config.resume_checkpoint_path}")
 
     # OmegaConf's __post_init__ for BaseConfig should have run if BaseConfig was used in OmegaConf.structured
     # However, OmegaConf sometimes requires explicit re-instantiation or specific handling for post_init with dataclasses.

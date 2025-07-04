@@ -117,17 +117,54 @@ def save_checkpoint(state, is_best, filename="checkpoint.pth.tar", best_filename
     if is_best:
         shutil.copyfile(filename, best_filename)
 
-def load_checkpoint(checkpoint_path, model, optimizer=None):
-    """Loads model and optimizer state from a checkpoint file."""
+def load_checkpoint(checkpoint_path, model_g, model_d, optimizer_g=None, optimizer_d=None, device='cpu'):
+    """
+    Loads model and optimizer states from a checkpoint file for Generator and Discriminator.
+    Returns the epoch and step to resume from.
+    """
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint file not found: {checkpoint_path}")
-        return None
-    checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    if optimizer and 'optimizer_state_dict' in checkpoint:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    print(f"Loaded checkpoint from {checkpoint_path}")
-    return checkpoint.get('epoch', 0), checkpoint.get('best_metric', float('inf'))
+        return 0, 0 # Default to starting from scratch
+
+    print(f"Loading checkpoint from {checkpoint_path}...")
+    # Load checkpoint to the specified device to avoid issues if saved on GPU and loading on CPU
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    if 'G_state_dict' in checkpoint:
+        model_g.load_state_dict(checkpoint['G_state_dict'])
+    else:
+        print("Warning: Generator state_dict not found in checkpoint.")
+        return 0,0
+
+    if 'D_state_dict' in checkpoint:
+        model_d.load_state_dict(checkpoint['D_state_dict'])
+    else:
+        print("Warning: Discriminator state_dict not found in checkpoint.")
+        return 0,0
+
+    if optimizer_g and 'optG_state_dict' in checkpoint:
+        optimizer_g.load_state_dict(checkpoint['optG_state_dict'])
+    elif optimizer_g:
+        print("Warning: Generator optimizer state_dict not found in checkpoint.")
+
+    if optimizer_d and 'optD_state_dict' in checkpoint:
+        optimizer_d.load_state_dict(checkpoint['optD_state_dict'])
+    elif optimizer_d:
+        print("Warning: Discriminator optimizer state_dict not found in checkpoint.")
+
+    start_epoch = checkpoint.get('epoch', 0)
+    current_step = checkpoint.get('step', 0) # Renamed from 'current_step' for clarity
+
+    # If resuming, typically start from the next epoch
+    # However, if saving mid-epoch, step is more accurate.
+    # Trainer will handle epoch increment logic.
+    print(f"Resuming from Epoch: {start_epoch}, Step: {current_step}")
+
+    # Return epoch and step. Trainer should probably start from epoch+1 if step is 0,
+    # or continue from current_epoch if step > 0 from a mid-epoch save.
+    # For simplicity, let trainer handle this. We return what's in checkpoint.
+    return start_epoch, current_step
+
 
 def setup_wandb(config, model, project_name="MedicalR3GAN_Refactored", watch_model=True):
     """Initializes Weights & Biases if enabled in config."""
