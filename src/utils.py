@@ -1,0 +1,350 @@
+import torch
+import torch.nn as nn
+import numpy as np
+from skimage.segmentation import relabel_sequential
+import os
+import shutil
+from tqdm import tqdm
+from PIL import Image
+from skimage.segmentation import slic
+from skimage.util import img_as_float
+
+# From legacy/gan5.py
+# ==================== UTILS ====================
+def spectral_norm(layer):
+    """Applies spectral normalization to a layer."""
+    return nn.utils.spectral_norm(layer)
+
+
+def relabel_and_clip(seg, max_labels):
+    """Relabels segmentation mask and clips labels to max_labels."""
+    seg, _, _ = relabel_sequential(seg)
+    seg = np.where(seg < max_labels, seg, max_labels - 1)
+    return seg.astype(np.int32)
+
+
+def create_adjacency_matrix(seg_array, num_superpixels):
+    """
+    Creates a normalized adjacency matrix from a segmentation array.
+
+    Args:
+        seg_array (np.ndarray): Segmentation mask (H, W).
+        num_superpixels (int): Number of superpixels (S).
+
+    Returns:
+        np.ndarray: Normalized adjacency matrix (S, S).
+    """
+    H, W = seg_array.shape
+    S = num_superpixels
+    adj = np.zeros((S, S), dtype=np.float32)
+
+    for y in range(H):
+        for x in range(W):
+            current_superpixel_label = int(seg_array[y, x])
+            if current_superpixel_label >= S:  # Should not happen if relabel_and_clip was used
+                continue
+
+            # Check neighbors (up, down, left, right)
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < H and 0 <= nx < W:
+                    neighbor_superpixel_label = int(seg_array[ny, nx])
+                    if neighbor_superpixel_label < S and neighbor_superpixel_label != current_superpixel_label:
+                        adj[current_superpixel_label, neighbor_superpixel_label] = 1.0
+                        adj[neighbor_superpixel_label, current_superpixel_label] = 1.0 # Symmetric
+
+    # Normalize adjacency matrix
+    deg = adj.sum(axis=1)
+    inv_sqrt_deg = np.zeros_like(deg)
+    mask = deg > 0
+    inv_sqrt_deg[mask] = deg[mask] ** -0.5
+    D_inv_sqrt = np.diag(inv_sqrt_deg)
+
+    A_hat = D_inv_sqrt @ adj @ D_inv_sqrt
+    return A_hat
+
+def precompute_superpixels_for_dataset(image_paths, cache_dir, image_size, num_superpixels_config, compactness=10):
+    """
+    Precomputes superpixels, features, and adjacency matrices for all images in a list.
+    Saves them to cache_dir. This function is intended to be called once before training.
+    It uses the num_superpixels from the config.
+    """
+    if os.path.exists(cache_dir):
+        print(f"Cache directory {cache_dir} exists. Removing old cache.")
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+    print(f"Preprocessing images and caching to {cache_dir}...")
+
+    for img_path in tqdm(image_paths, desc="Preprocessing Images"):
+        base_name = os.path.splitext(os.path.basename(img_path))[0]
+        cache_file_path = os.path.join(cache_dir, base_name + ".npz")
+
+        # This check is mostly redundant if we clear the cache, but good for robustness
+        if os.path.exists(cache_file_path):
+            continue
+
+        try:
+            img = Image.open(img_path).convert("RGB")
+            img_resized = img.resize((image_size, image_size), Image.BILINEAR)
+
+            # Segmentation
+            img_float = img_as_float(img_resized)
+            seg_mask = slic(img_float, n_segments=num_superpixels_config, compactness=compactness, start_label=0)
+            seg_mask = relabel_and_clip(seg_mask, num_superpixels_config) # Ensure labels are 0 to S-1
+
+            # Adjacency Matrix
+            adj_matrix = create_adjacency_matrix(seg_mask, num_superpixels_config)
+
+            # Note: Mean color features will be computed on-the-fly by the Dataset's __getitem__
+            # to avoid storing potentially large raw image data or feature data if not always needed
+            # in the same format. Here we only cache segmentation and adjacency.
+            np.savez(cache_file_path, segments=seg_mask, adj=adj_matrix)
+
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            continue
+    print("Preprocessing complete.")
+
+
+# Placeholder for other utilities like:
+# - Checkpoint saving/loading
+# - Logging setup (e.g., for standard Python logger)
+# - Image grid creation for visualization (if not using torchvision.utils directly)
+
+def save_checkpoint(state, is_best, filename="checkpoint.pth.tar", best_filename="model_best.pth.tar"):
+    """Saves model and optimizer state."""
+    torch.save(state, filename)
+    if is_best:
+        shutil.copyfile(filename, best_filename)
+
+def load_checkpoint(checkpoint_path, model_g, model_d, model_e=None,
+                    optimizer_g=None, optimizer_d=None, optimizer_e=None,
+                    device='cpu'):
+    """
+    Loads model and optimizer states from a checkpoint file.
+    Handles optional Encoder model (model_e) and its optimizer (optimizer_e) for gan6.
+    Returns the epoch and step to resume from.
+    """
+    if not os.path.exists(checkpoint_path):
+        print(f"Checkpoint file not found: {checkpoint_path}")
+        return 0, 0 # Default to starting from scratch
+
+    print(f"Loading checkpoint from {checkpoint_path}...")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    # Load Generator
+    if 'G_state_dict' in checkpoint and model_g is not None:
+        model_g.load_state_dict(checkpoint['G_state_dict'])
+    elif model_g is not None:
+        print("Warning: Generator state_dict (G_state_dict) not found in checkpoint.")
+        # return 0,0 # Or allow partial load? For now, require G and D.
+
+    # Load Discriminator
+    if 'D_state_dict' in checkpoint and model_d is not None:
+        model_d.load_state_dict(checkpoint['D_state_dict'])
+    elif model_d is not None:
+        print("Warning: Discriminator state_dict (D_state_dict) not found in checkpoint.")
+        # return 0,0
+
+    # Load Encoder (optional, for gan6)
+    if model_e is not None: # Only try to load if model_e is provided
+        if 'E_state_dict' in checkpoint:
+            model_e.load_state_dict(checkpoint['E_state_dict'])
+        else:
+            print("Warning: Encoder state_dict (E_state_dict) not found in checkpoint, but an Encoder model was provided.")
+
+    # Load Optimizers
+    if optimizer_g and 'optG_state_dict' in checkpoint:
+        optimizer_g.load_state_dict(checkpoint['optG_state_dict'])
+    elif optimizer_g:
+        print("Warning: Generator optimizer state_dict (optG_state_dict) not found in checkpoint.")
+
+    if optimizer_d and 'optD_state_dict' in checkpoint:
+        optimizer_d.load_state_dict(checkpoint['optD_state_dict'])
+    elif optimizer_d:
+        print("Warning: Discriminator optimizer state_dict (optD_state_dict) not found in checkpoint.")
+
+    if optimizer_e and model_e is not None: # Only try to load if optimizer_e and model_e are provided
+        if 'optE_state_dict' in checkpoint:
+            optimizer_e.load_state_dict(checkpoint['optE_state_dict'])
+        else:
+            print("Warning: Encoder optimizer state_dict (optE_state_dict) not found in checkpoint, but an Encoder optimizer was provided.")
+
+    start_epoch = checkpoint.get('epoch', 0)
+    current_step = checkpoint.get('step', 0)
+
+    # If resuming, typically start from the next epoch
+    # However, if saving mid-epoch, step is more accurate.
+    # Trainer will handle epoch increment logic.
+    print(f"Resuming from Epoch: {start_epoch}, Step: {current_step}")
+
+    # Return epoch and step. Trainer should probably start from epoch+1 if step is 0,
+    # or continue from current_epoch if step > 0 from a mid-epoch save.
+    # For simplicity, let trainer handle this. We return what's in checkpoint.
+    return start_epoch, current_step
+
+
+def setup_wandb(config, model, project_name="MedicalR3GAN_Refactored", watch_model=True):
+    """Initializes Weights & Biases if enabled in config."""
+    if config.use_wandb:
+        try:
+            import wandb
+            wandb.init(project=project_name, config=vars(config))
+            if watch_model and model is not None:
+                wandb.watch(model)
+            print("Weights & Biases initialized.")
+            return wandb
+        except ImportError:
+            print("wandb not installed. Skipping W&B initialization.")
+            config.use_wandb = False # Disable if import fails
+            return None
+        except Exception as e:
+            print(f"Could not initialize W&B: {e}. Skipping W&B initialization.")
+            config.use_wandb = False # Disable on other errors
+            return None
+    return None
+
+def log_to_wandb(wandb_run, metrics_dict, step=None):
+    """Logs metrics to W&B if enabled and initialized."""
+    if wandb_run:
+        if step is not None:
+            wandb_run.log(metrics_dict, step=step)
+        else:
+            wandb_run.log(metrics_dict)
+
+# Ensure cfg is not directly used in utils. It should be passed or accessed via config object.
+# The create_adjacency_matrix was dependent on cfg.num_superpixels.
+# I've changed its signature to accept num_superpixels directly.
+# The precompute_superpixels also depended on cfg. I've updated its signature.
+# It now takes num_superpixels_config.
+# The original precompute_superpixels function in gan5.py also had image_size and cache_dir from cfg.
+# These are now passed as arguments.
+# It also directly used cfg.num_superpixels, which is now num_superpixels_config.
+
+# Consider adding a function to prepare image paths from a directory.
+def get_image_paths(dataset_dir, extensions=('.png', '.jpg', '.jpeg')):
+    """Gets all image paths from a directory with given extensions."""
+    paths = []
+    for root, _, files in os.walk(dataset_dir):
+        for file in files:
+            if file.lower().endswith(extensions):
+                paths.append(os.path.join(root, file))
+    return sorted(paths)
+
+# Add a simple function for image normalization to be used by dataset
+# if not using torchvision transforms directly for everything.
+def normalize_image(image_tensor):
+    """Normalizes a tensor image to [-1, 1]. Assumes input is [0, 1]."""
+    return image_tensor * 2.0 - 1.0
+
+def denormalize_image(image_tensor):
+    """Denormalizes a tensor image from [-1, 1] to [0, 1]."""
+    return (image_tensor + 1.0) / 2.0
+
+class ImageToTensor:
+    """Converts a PIL Image to a PyTorch tensor (C, H, W) in range [0, 1]."""
+    def __call__(self, pil_image):
+        img_np = np.array(pil_image).astype(np.float32) / 255.0
+        if img_np.ndim == 2: # Grayscale
+            img_np = np.expand_dims(img_np, axis=-1)
+        return torch.from_numpy(img_np.transpose(2, 0, 1))
+
+class ResizePIL:
+    """Resizes a PIL image."""
+    def __init__(self, size, interpolation=Image.BILINEAR):
+        self.size = size
+        self.interpolation = interpolation
+
+    def __call__(self, pil_image):
+        return pil_image.resize(self.size, self.interpolation)
+
+# --- PyTorch Geometric Related Utilities (for gan6 architecture) ---
+try:
+    from torch_geometric.data import Data
+    import skimage.graph as skgraph # For RAG
+    PYG_AVAILABLE = True
+except ImportError:
+    PYG_AVAILABLE = False
+    # print("Warning: PyTorch Geometric or scikit-image not fully available. Graph conversion utilities might fail.")
+    Data = None # Define Data as None or a placeholder if pyg not installed
+    skgraph = None
+
+
+def convert_image_to_pyg_graph(image_numpy_array_01, num_superpixels, slic_compactness=10, feature_type='mean_color'):
+    """
+    Converts a single image (as NumPy array in [0,1] range) to a PyTorch Geometric Data object.
+
+    Args:
+        image_numpy_array_01 (np.ndarray): Input image as a NumPy array (H, W, C), values in [0, 1].
+        num_superpixels (int): Target number of superpixels.
+        slic_compactness (float): Compactness parameter for SLIC.
+        feature_type (str): Type of node features to extract ('mean_color').
+
+    Returns:
+        torch_geometric.data.Data: Graph object with 'x' (node features) and 'edge_index'.
+                                   Returns None if PyG or skimage.graph is not available.
+    """
+    if not PYG_AVAILABLE or Data is None or skgraph is None:
+        raise ImportError("PyTorch Geometric or scikit-image.graph is required for graph conversion.")
+
+    # 1. SLIC Superpixels
+    # slic expects float image in range [0,1] or [-1,1], skimage.util.img_as_float handles this.
+    # Our input image_numpy_array_01 is already in [0,1]
+    spx_labels = slic(image_numpy_array_01, n_segments=num_superpixels, compactness=slic_compactness, start_label=0)
+
+    # Relabel to ensure contiguous labels from 0 to N-1, where N is actual number of superpixels
+    # This is important because max(spx_labels) might be < num_superpixels
+    # And after relabel_sequential, the number of unique labels is what matters.
+    # spx_labels, _, _ = relabel_sequential(spx_labels) # gan6 did not do this, but it's safer.
+    # Let's stick to gan6 logic for now: it used spx.max() + 1 for node count.
+    # However, it also did `counts = np.bincount(spx.flatten())` which would correctly size up to max label.
+    # And features were `feats = np.zeros((n_nodes, 3))` where n_nodes = spx.max() + 1
+    # This implies labels might not be contiguous from 0.
+    # For PyG, it's generally better if node indices are 0 to N-1.
+    # Let's assume SLIC output + start_label=0 gives reasonable labels, but bincount handles gaps.
+    # The RAG construction in skimage also handles non-contiguous labels by finding unique ones.
+
+    num_actual_nodes = np.max(spx_labels) + 1
+
+    # 2. Node Features (e.g., mean color)
+    if feature_type == 'mean_color':
+        node_features = np.zeros((num_actual_nodes, image_numpy_array_01.shape[2]), dtype=np.float32)
+        # Efficiently calculate mean color for each superpixel
+        for c in range(image_numpy_array_01.shape[2]): # Iterate over color channels
+            channel_sum_per_superpixel = np.bincount(spx_labels.flatten(), weights=image_numpy_array_01[..., c].flatten(), minlength=num_actual_nodes)
+            pixel_counts_per_superpixel = np.bincount(spx_labels.flatten(), minlength=num_actual_nodes)
+
+            # Avoid division by zero for superpixels that might not have any pixels (if any)
+            valid_mask = pixel_counts_per_superpixel > 0
+            node_features[valid_mask, c] = channel_sum_per_superpixel[valid_mask] / pixel_counts_per_superpixel[valid_mask]
+    else:
+        raise ValueError(f"Unsupported feature_type: {feature_type}")
+
+    # 3. Edges from Region Adjacency Graph (RAG)
+    # rag_mean_color also computes mean colors, but we did it above for flexibility.
+    # We only need edges from it.
+    # skimage.graph.rag_mean_color builds graph based on unique labels in spx_labels.
+    # The node IDs in rag.edges will correspond to these unique labels.
+    # If spx_labels are not 0..N-1 contiguous, rag will map them. We need to ensure consistency.
+    # Let's re-evaluate gan6's RAG usage:
+    # `rag = skgraph.rag_mean_color(img_np, spx)`
+    # `edges = np.array([[u, v] for u, v in rag.edges()], dtype=np.int64)`
+    # This implies node IDs `u,v` are directly from SLIC labels.
+    # So, if SLIC produces labels 0, 1, 3 (missing 2), then `rag` uses these.
+    # Features were `feats = np.zeros((spx.max() + 1, 3))`. This is fine.
+
+    rag = skgraph.rag_mean_color(image_numpy_array_01, spx_labels) # Pass image_numpy_array_01
+
+    # Edges are typically stored as [2, num_edges] in PyG
+    if len(rag.edges) > 0:
+        edge_list = np.array(list(rag.edges), dtype=np.int64).T
+    else:
+        edge_list = np.empty((2, 0), dtype=np.int64)
+
+    edge_index = torch.from_numpy(edge_list)
+    x = torch.from_numpy(node_features)
+
+    return Data(x=x, edge_index=edge_index)
+
+
+print("src/utils.py created and populated.")

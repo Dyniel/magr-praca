@@ -1,0 +1,60 @@
+# Example experiment_config.yaml for gan5_gcn architecture
+# This file can be used to override defaults from BaseConfig.
+
+# --- System and Paths ---
+project_name: "SuperpixelGAN_LungSCC_Experiment1"
+run_name: "gan5_refactored_lr_1e-5_bs_8"
+# dataset_path: "/path/to/your/custom_dataset" # Override if needed
+# cache_dir: "custom_cache_location" # Override if needed
+# output_dir_base: "/shared_drive/my_gan_experiments" # Override if needed
+
+# --- Data and Preprocessing ---
+image_size: 256
+num_superpixels: 200 # This is the global one, used by gan5 SuperpixelDataset
+slic_compactness: 15.0 # This is the global one, used by gan5 SuperpixelDataset
+debug_num_images: 0 # Set to 0 to use all images for a proper experiment
+
+# --- Model Configuration ---
+model:
+  architecture: "gan5_gcn" # Explicitly stating, though it's the default in BaseConfig
+
+  # Shared z_dim (used by gan5 G)
+  z_dim: 256
+
+  # Parameters for gan5_gcn architecture
+  g_channels: 128
+  g_num_gcn_blocks: 8
+  g_dropout_rate: 0.25 # Slightly increased from default
+  g_ada_in: False
+  g_spectral_norm: True
+  g_final_norm: "instancenorm"
+
+  d_channels: 64
+  d_spectral_norm: True
+
+# --- Training Hyperparameters ---
+batch_size: 8 # Reduced batch size from BaseConfig default
+num_epochs: 250 # Increased epochs from BaseConfig default
+g_lr: 1e-5 # Lower generator learning rate
+d_lr: 1e-4 # Lower discriminator learning rate
+beta1: 0.0
+beta2: 0.99
+r1_gamma: 5.0
+d_updates_per_g_update: 2
+
+# --- Logging and Evaluation ---
+use_wandb: True
+# wandb_project_name: "MyCustomWandBProject" # Override if needed
+# wandb_run_name: "MyAmazingExperimentRun" # Override if needed
+log_freq_step: 50
+sample_freq_epoch: 1
+num_samples_to_log: 8
+checkpoint_freq_epoch: 5
+
+enable_fid_calculation: True
+fid_num_images: 5000
+fid_batch_size: 32
+fid_freq_epoch: 10 # Calculate FID less frequently
+
+# --- Resume Training ---
+# resume_checkpoint_path: null # or path/to/checkpoint.pth.tar

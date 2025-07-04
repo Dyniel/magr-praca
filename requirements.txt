@@ -1,0 +1,19 @@
+torch>=1.10.0
+torchvision
+numpy
+scikit-image
+Pillow
+omegaconf>=2.1
+tqdm
+wandb
+pytorch-fid
+# For torch-geometric, installation is complex and depends on PyTorch/CUDA version.
+# Please follow official PyTorch Geometric installation instructions:
+# https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html
+# Example components (install specific versions via the PyG website's commands):
+# pyg_lib
+# torch_scatter
+# torch_sparse
+# torch_cluster
+# torch_spline_conv
+# torch_geometric
