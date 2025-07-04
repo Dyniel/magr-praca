@@ -542,3 +542,105 @@ class Trainer:
         print("Training finished.")
         if self.wandb_run:
             self.wandb_run.finish()
+
+
+if __name__ == "__main__":
+    import argparse
+    from omegaconf import OmegaConf
+    from configs.base_config import BaseConfig # Assuming BaseConfig is in configs.base_config
+
+    def main():
+        # --- Argument Parsing and Configuration Loading ---
+        parser = argparse.ArgumentParser(description="Train a GAN model.")
+        parser.add_argument("--config_file", type=str, default=None,
+                            help="Path to a YAML configuration file to override base defaults.")
+        # Allow unknown args for OmegaConf to parse as dot-list overrides
+        args, unknown_args = parser.parse_known_args()
+
+        # Start with the structured default config
+        conf = OmegaConf.structured(BaseConfig)
+
+        # Load config from YAML file if provided
+        if args.config_file:
+            try:
+                file_conf = OmegaConf.load(args.config_file)
+                conf = OmegaConf.merge(conf, file_conf)
+                print(f"Loaded configuration from {args.config_file}")
+            except FileNotFoundError:
+                print(f"Warning: Config file {args.config_file} not found. Using defaults and CLI overrides.")
+            except Exception as e:
+                print(f"Error loading config file {args.config_file}: {e}. Using defaults and CLI overrides.")
+
+
+        # Apply command-line overrides (e.g., batch_size=2 num_epochs=3)
+        # These need to be in the format: param.subparam=value or param=value
+        cli_conf_list = []
+        temp_dict = {}
+        for i in range(0, len(unknown_args), 2 if '=' in ''.join(unknown_args) else 1):
+            arg = unknown_args[i]
+            if '=' in arg: # handles param=value
+                cli_conf_list.append(arg)
+            elif i + 1 < len(unknown_args): # handles param value
+                cli_conf_list.append(f"{arg}={unknown_args[i+1]}")
+                # This part is tricky with current OmegaConf parsing from list of strings if not "key=value"
+                # For simplicity, we'll assume users will pass "key=value" for CLI overrides
+                # A more robust way would be to parse them into a dict first, then OmegaConf.from_dotlist or OmegaConf.from_dict
+            else:
+                print(f"Warning: Ignoring orphaned CLI argument: {arg}")
+
+        # Re-parse unknown_args assuming they are OmegaConf dot-list style (e.g., batch_size=2)
+        # The previous loop was a bit convoluted. OmegaConf can handle a list of "key=value" strings.
+        # Let's simplify the parsing of unknown_args for OmegaConf.
+        # We expect overrides like 'batch_size=2' 'num_epochs=3'
+
+        # Filter out any non-key-value pair arguments from unknown_args, like flags without values if any
+        # For example, if someone runs `python train.py batch_size=2 --some_flag num_epochs=3`
+        # OmegaConf expects a list of strings like ["batch_size=2", "num_epochs=3"]
+
+        # Let's refine the CLI override parsing.
+        # The original command was: python -m scripts.train --config_file configs/experiment_config.yaml batch_size=2 num_epochs=3 ...
+        # `unknown_args` would be ['batch_size=2', 'num_epochs=3', 'debug_num_images=4', 'use_wandb=False', 'num_workers=0']
+        # This format is directly consumable by OmegaConf.from_cli() or by merging with OmegaConf.from_dotlist()
+
+        if unknown_args:
+            try:
+                # OmegaConf.from_cli() is designed for sys.argv directly.
+                # For already parsed unknown_args (list of strings), OmegaConf.from_dotlist is more appropriate.
+                # However, OmegaConf.from_dotlist expects dot-separated paths for nested keys.
+                # The provided CLI arguments are simple key=value for top-level or direct model keys.
+                # OmegaConf.merge accepts multiple dicts or OmegaConf objects.
+                # We can create a new OmegaConf object from these CLI args.
+
+                # Let's try to create a dotlist from the unknown_args.
+                # Example: ['batch_size=2', 'model.z_dim=128']
+                # This is what OmegaConf.from_dotlist expects.
+                # The arguments `batch_size=2` are already in this format.
+
+                cli_overrides = OmegaConf.from_dotlist(unknown_args)
+                conf = OmegaConf.merge(conf, cli_overrides)
+                print(f"Applied CLI overrides: {unknown_args}")
+            except Exception as e:
+                print(f"Error applying CLI overrides: {e}")
+                parser.print_help()
+                return
+
+
+        # --- Trainer Initialization and Training ---
+        # Ensure the output directory defined in the config is created
+        # The Trainer class __init__ already does this with config.output_dir_run
+        # os.makedirs(conf.output_dir_run, exist_ok=True) # Not strictly needed here due to Trainer
+
+        print("Final configuration after merges:")
+        print(OmegaConf.to_yaml(conf))
+
+        try:
+            trainer = Trainer(config=conf)
+            print("Trainer initialized. Starting training...")
+            trainer.train()
+        except Exception as e:
+            print(f"An error occurred during trainer initialization or training: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+    main()
