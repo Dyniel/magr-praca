@@ -1,0 +1,70 @@
+# Example experiment_config.yaml
+# This file can be used to override defaults from BaseConfig.
+
+# --- System and Paths ---
+project_name: "SuperpixelGAN_LungSCC_Experiment1"
+run_name: "gan5_refactored_lr_1e-5_bs_8"
+# dataset_path: "/path/to/your/custom_dataset" # Override if needed
+# cache_dir: "custom_cache_location" # Override if needed
+# output_dir_base: "/shared_drive/my_gan_experiments" # Override if needed
+
+# --- Data and Preprocessing ---
+image_size: 256
+num_superpixels: 200 # Changed from default 150
+slic_compactness: 15.0 # Changed from default 10.0
+# debug_num_images: 16 # For a quick test run
+
+# --- Model Hyperparameters ---
+z_dim: 256
+
+# Generator (G)
+g_channels: 128
+g_num_gcn_blocks: 8
+g_dropout_rate: 0.25 # Slightly increased
+g_ada_in: False
+g_spectral_norm: True
+g_final_norm: "instancenorm"
+
+# Discriminator (D)
+d_channels: 64
+d_spectral_norm: True
+
+# --- Training Hyperparameters ---
+batch_size: 8 # Reduced batch size
+num_epochs: 250 # Increased epochs
+g_lr: 1e-5 # Lower generator learning rate
+d_lr: 1e-4 # Lower discriminator learning rate
+beta1: 0.0
+beta2: 0.99
+r1_gamma: 5.0
+d_updates_per_g_update: 2
+
+# --- Logging and Evaluation ---
+use_wandb: True
+# wandb_project_name: "MyCustomWandBProject" # Override if needed
+# wandb_run_name: "MyAmazingExperimentRun" # Override if needed
+log_freq_step: 50
+sample_freq_epoch: 1
+num_samples_to_log: 8
+checkpoint_freq_epoch: 5
+
+# To use this, the training script would do something like:
+# from omegaconf import OmegaConf
+# from configs.base_config import BaseConfig
+#
+# # Start with structured base config
+# conf = OmegaConf.structured(BaseConfig)
+#
+# # Load YAML config file
+# yaml_conf = OmegaConf.load("configs/experiment_config.yaml") # Or path from CLI arg
+#
+# # Merge - YAML overrides base
+# conf = OmegaConf.merge(conf, yaml_conf)
+#
+# # Optionally, merge command-line arguments
+# # cli_conf = OmegaConf.from_cli()
+# # conf = OmegaConf.merge(conf, cli_conf)
+#
+# # Now 'conf' object has the final configuration
+# print(conf)
+print("configs/experiment_config.yaml example created.")
