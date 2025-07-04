@@ -24,22 +24,9 @@ class BaseConfig:
     # Limit number of images for debugging (0 = use all)
     debug_num_images: int = 0
 
-    # --- Model Hyperparameters ---
-    # Shared
-    z_dim: int = 256
-
-    # Generator (G)
-    g_channels: int = 128 # Base channels for G's GCN blocks
-    g_num_gcn_blocks: int = 8
-    g_dropout_rate: float = 0.2
-    g_ada_in: bool = False # Whether GCNBlocks use AdaIN
-    g_spectral_norm: bool = True # Spectral norm for G's WSConv2d layers
-    g_final_norm: str = "instancenorm" # 'instancenorm', 'layernorm', or 'none'
-
-    # Discriminator (D)
-    d_channels: int = 64 # Base channels for D
-    d_spectral_norm: bool = True # Spectral norm for D's WSConv2d and Linear layers
-    # d_num_downsampling_layers: int = 2 # Implicitly defined by current D structure
+    # --- Model Configuration ---
+    # This will be a nested structure, defined below
+    model: 'ModelConfig' = field(default_factory=lambda: ModelConfig())
 
     # --- Training Hyperparameters ---
     batch_size: int = 16
@@ -92,6 +79,62 @@ class BaseConfig:
         # The SuperpixelDataset cache_dir is constructed within the dataset itself
         # based on num_superpixels and image_size to allow multiple caches.
         # self.cache_dir = os.path.join(self.cache_dir_base, f"sp_{self.num_superpixels}_is_{self.image_size}")
+
+        # Ensure model defaults are populated if model was overridden by a dict from YAML
+        if not isinstance(self.model, ModelConfig):
+            # If self.model is a dict (e.g. from OmegaConf.merge with a YAML dict for model)
+            # then we need to create a ModelConfig object from it to ensure defaults for missing fields.
+            # This assumes ModelConfig can be initialized from a dict.
+            model_dict = self.model if isinstance(self.model, dict) else vars(self.model) # vars for OmegaConf DotList
+            self.model = ModelConfig(**model_dict)
+
+
+@dataclass
+class ModelConfig:
+    """Configuration for the model architecture."""
+    architecture: str = "gan5_gcn"  # Options: "gan5_gcn", "gan6_gat_cnn"
+
+    # --- Shared Hyperparameters (used by both architectures if applicable) ---
+    z_dim: int = 256 # General latent dimension (e.g., for noise in gan5, or part of combined z in gan6)
+
+    # --- Parameters for gan5_gcn architecture ---
+    # (These were previously top-level in BaseConfig)
+    # Generator (G for gan5)
+    g_channels: int = 128       # Base channels for G's GCN blocks
+    g_num_gcn_blocks: int = 8
+    g_dropout_rate: float = 0.2
+    g_ada_in: bool = False      # Whether GCNBlocks use AdaIN
+    g_spectral_norm: bool = True # Spectral norm for G's WSConv2d layers
+    g_final_norm: str = "instancenorm" # 'instancenorm', 'layernorm', or 'none'
+
+    # Discriminator (D for gan5)
+    d_channels: int = 64        # Base channels for D
+    d_spectral_norm: bool = True  # Spectral norm for D's WSConv2d and Linear layers
+
+    # --- Parameters for gan6_gat_cnn architecture ---
+    # Graph Encoder (E for gan6)
+    gat_dim: int = 128
+    gat_heads: int = 4
+    gat_layers: int = 3
+    gat_dropout: float = 0.0 # Dropout for GAT layers
+    gan6_z_dim_graph_encoder_output: int = 128 # Output dim of GraphEncoder (z_graph)
+
+    # Generator (G_cnn for gan6)
+    gan6_z_dim_noise: int = 128 # Dimension of z_noise to be combined with z_graph
+    gan6_gen_init_size: int = 4
+    gan6_gen_feat_start: int = 512
+    gan6_gen_spectral_norm: bool = True
+
+    # Discriminator (D_cnn for gan6)
+    gan6_d_feat_start: int = 64
+    gan6_d_final_conv_size: int = 16 # Spatial size of feature map before FC layer in D
+    gan6_d_spectral_norm: bool = True
+    gan6_d_spectral_norm_fc: bool = True # Whether to apply SN to the final FC layer of D_cnn
+
+    # Superpixel settings specific to gan6 graph creation (if different from global num_superpixels)
+    # These are used by ImageToGraphDataset via config.model.*
+    gan6_num_superpixels: int = 200      # Default for gan6, can differ from global num_superpixels
+    gan6_slic_compactness: float = 10.0  # Default for gan6
 
 
 # Example of how to use:

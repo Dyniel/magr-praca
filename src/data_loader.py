@@ -5,9 +5,21 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from torchvision import transforms # Will be used for basic transforms if not passed custom ones
 
-from src.utils import precompute_superpixels_for_dataset, get_image_paths, ImageToTensor, ResizePIL, normalize_image
+from src.utils import (
+    precompute_superpixels_for_dataset, get_image_paths,
+    ImageToTensor, ResizePIL, normalize_image,
+    convert_image_to_pyg_graph, PYG_AVAILABLE # For gan6
+)
 
-class SuperpixelDataset(Dataset):
+if PYG_AVAILABLE:
+    from torch_geometric.data import Batch as PyGBatch
+    from torch_geometric.data import Data as PyGData
+else:
+    PyGBatch = None # Placeholder
+    PyGData = None
+
+
+class SuperpixelDataset(Dataset): # For gan5-style models
     def __init__(self, image_paths, config, transform=None, target_transform=None):
         """
         Args:
@@ -142,6 +154,159 @@ def get_dataloader(config, shuffle=True):
         num_workers=config.num_workers,
         pin_memory=True, # Good practice if using CUDA
         drop_last=True # Important for some GAN training if batch consistency is needed
+    )
+    return dataloader
+
+
+# --- For gan6-style models using PyTorch Geometric ---
+
+class ImageToGraphDataset(Dataset):
+    def __init__(self, image_paths, config, image_transform=None):
+        """
+        Dataset for gan6-style models. Converts images to PyG graph objects.
+        Args:
+            image_paths (list): List of paths to images.
+            config (object): Configuration object.
+            image_transform (callable, optional): Transform for the real image tensor.
+        """
+        if not PYG_AVAILABLE or PyGData is None:
+            raise ImportError("PyTorch Geometric is required for ImageToGraphDataset.")
+
+        self.image_paths = image_paths
+        self.config = config
+
+        # Transform for the image itself (e.g., to tensor, normalize for D)
+        if image_transform is None:
+            self.image_transform = transforms.Compose([
+                ResizePIL((config.image_size, config.image_size)), # Resize before graph conversion too
+                ImageToTensor(), # Converts to [0,1] tensor C,H,W
+                transforms.Lambda(normalize_image) # Normalizes to [-1,1]
+            ])
+        else:
+            self.image_transform = image_transform
+
+        # Cache directory for PyG Data objects
+        # Example: cache_root/pyg_graphs_sp100_slic10_is256/
+        self.graph_cache_dir = os.path.join(
+            config.cache_dir,
+            f"pyg_graphs_sp{config.model.gan6_num_superpixels}_slic{config.model.gan6_slic_compactness}_is{config.image_size}"
+        )
+        self._prepare_graph_cache()
+
+    def _prepare_graph_cache(self):
+        os.makedirs(self.graph_cache_dir, exist_ok=True)
+        print(f"Using/creating PyG graph cache at: {self.graph_cache_dir}")
+
+        missing_cache_files = False
+        for img_path in self.image_paths:
+            base_name = os.path.splitext(os.path.basename(img_path))[0]
+            cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
+            if not os.path.exists(cache_file):
+                missing_cache_files = True
+                break
+
+        if missing_cache_files:
+            print("Preprocessing images to PyG graphs for caching...")
+            for img_path in tqdm(self.image_paths, desc="Caching PyG Graphs"):
+                base_name = os.path.splitext(os.path.basename(img_path))[0]
+                cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
+                if os.path.exists(cache_file):
+                    continue
+
+                try:
+                    # Load image, resize, convert to numpy [0,1] for graph conversion
+                    pil_img = Image.open(img_path).convert("RGB")
+                    pil_resized = pil_img.resize((self.config.image_size, self.config.image_size), Image.BILINEAR)
+                    img_np_01 = np.array(pil_resized).astype(np.float32) / 255.0
+                    if img_np_01.ndim == 2: # Grayscale
+                         img_np_01 = np.expand_dims(img_np_01, axis=-1)
+                    if img_np_01.shape[-1] != 3 and img_np_01.shape[-1] == 1 : # If grayscale with one channel, make it 3 for consistency
+                        img_np_01 = np.concatenate([img_np_01]*3, axis=-1)
+
+
+                    graph_data = convert_image_to_pyg_graph(
+                        img_np_01,
+                        num_superpixels=self.config.model.gan6_num_superpixels,
+                        slic_compactness=self.config.model.gan6_slic_compactness
+                        # feature_type could be added to config if more options are needed
+                    )
+                    torch.save(graph_data, cache_file)
+                except Exception as e:
+                    print(f"Error processing and caching graph for {img_path}: {e}")
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        base_name = os.path.splitext(os.path.basename(img_path))[0]
+        graph_cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
+
+        try:
+            graph_data = torch.load(graph_cache_file)
+        except Exception as e:
+            # This should ideally be caught by _prepare_graph_cache
+            raise RuntimeError(f"Error loading cached graph data for {img_path} from {graph_cache_file}: {e}")
+
+        # Load and transform the real image (for Discriminator input)
+        pil_img = Image.open(img_path).convert("RGB")
+        real_image_tensor = self.image_transform(pil_img)
+
+        return real_image_tensor, graph_data
+
+
+def collate_graphs(batch):
+    """Collate function for ImageToGraphDataset."""
+    if not PYG_AVAILABLE or PyGBatch is None:
+        raise ImportError("PyTorch Geometric is required for collate_graphs.")
+
+    real_images, graph_data_objects = zip(*batch)
+    # Filter out None graphs if any failed during loading (should not happen with proper caching)
+    valid_graphs = [g for g in graph_data_objects if g is not None]
+    if len(valid_graphs) != len(graph_data_objects):
+        print(f"Warning: Some graph data objects were None. Found {len(valid_graphs)} valid graphs out of {len(graph_data_objects)}.")
+        # This might lead to batch size mismatch if not handled carefully.
+        # For now, assume all graphs are valid due to caching.
+
+    return torch.stack(real_images), PyGBatch.from_data_list(valid_graphs)
+
+
+def get_dataloader(config, shuffle=True):
+    """
+    Creates and returns a DataLoader.
+    Selects dataset type based on config.model.architecture.
+    """
+    image_paths = get_image_paths(config.dataset_path)
+    if not image_paths:
+        raise ValueError(f"No images found in {config.dataset_path}")
+
+    if config.debug_num_images > 0 and config.debug_num_images < len(image_paths):
+        print(f"Using a subset of {config.debug_num_images} images for debugging.")
+        image_paths = image_paths[:config.debug_num_images]
+
+    dataset_type = getattr(config.model, "architecture", "gan5_gcn") # Default to gan5
+
+    if dataset_type == "gan6_gat_cnn":
+        if not PYG_AVAILABLE:
+            raise ImportError("PyTorch Geometric is required for 'gan6_gat_cnn' architecture but not found.")
+        print("Using ImageToGraphDataset for gan6_gat_cnn architecture.")
+        dataset = ImageToGraphDataset(image_paths=image_paths, config=config)
+        collate_fn_to_use = collate_graphs
+    elif dataset_type == "gan5_gcn":
+        print("Using SuperpixelDataset for gan5_gcn architecture.")
+        dataset = SuperpixelDataset(image_paths=image_paths, config=config)
+        collate_fn_to_use = None # Use default collate for SuperpixelDataset
+    else:
+        raise ValueError(f"Unsupported model.architecture: {dataset_type}")
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        shuffle=shuffle,
+        num_workers=config.num_workers,
+        pin_memory=True,
+        drop_last=True,
+        collate_fn=collate_fn_to_use
     )
     return dataloader
 

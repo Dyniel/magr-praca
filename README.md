@@ -29,9 +29,11 @@ This project implements a Generative Adversarial Network (GAN) that is condition
 
 ## Features
 
-*   **Superpixel Conditioning**: Utilizes SLIC superpixels and their adjacency information.
-*   **Graph Convolutional Networks (GCNs)**: The Generator uses GCN blocks to process superpixel features.
-*   **Configurable Architecture**: Model hyperparameters (channels, layers, dropout, etc.) are configurable.
+*   **Multiple Architectures**: Supports two main GAN architectures:
+    *   `gan5_gcn`: Uses GCNs directly on superpixel features within the generator (based on `legacy/gan5.py`).
+    *   `gan6_gat_cnn`: Employs a Graph Attention Network (GAT) based encoder to produce a graph embedding, which then conditions a standard CNN generator (based on `legacy/gan6.py`).
+*   **Superpixel Processing**: Utilizes SLIC superpixels. For `gan5_gcn`, adjacency matrices are used. For `gan6_gat_cnn`, graph structures compatible with PyTorch Geometric are created (nodes are superpixels, edges from RAG).
+*   **Configurable Components**: Model hyperparameters (channels, layers, dropout, GAT settings, etc.) are configurable for both architectures.
 *   **Flexible Configuration System**: Uses OmegaConf to manage configurations via a base dataclass and YAML override files.
 *   **Weights & Biases Logging**: Integrated for experiment tracking (can be disabled).
 *   **Checkpointing**: Saves model checkpoints during training.
@@ -64,10 +66,19 @@ This project implements a Generative Adversarial Network (GAN) that is condition
     *   `tqdm`
     *   `wandb` (optional, for logging)
     *   `pytorch-fid` (for FID calculation)
+    *   `torch-geometric` (required for `gan6_gat_cnn` architecture)
     ```bash
     pip install torch torchvision numpy scikit-image Pillow omegaconf tqdm wandb pytorch-fid
-    # Add other specific versions as needed
     ```
+    *   **For PyTorch Geometric (`torch-geometric`):** Installation can be version-sensitive with PyTorch and CUDA. Follow the official instructions at [PyTorch Geometric's documentation](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html). An example command might look like:
+        ```bash
+        # Replace ${TORCH} and ${CUDA} with your PyTorch and CUDA versions (e.g., 1.13.1 and cu117)
+        # Example for PyTorch 1.13.1 and CUDA 11.7:
+        # pip install torch_geometric torch_sparse torch_scatter torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-1.13.1+cu117.html
+
+        # Check the PyG website for the correct command for your specific PyTorch/CUDA setup.
+        # pip install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+        ```
 
 4.  **Dataset:**
     *   Download or prepare your image dataset.
@@ -85,11 +96,21 @@ The training process is controlled by configuration files:
 Key configuration aspects:
 *   `project_name`, `run_name`: Define naming for output directories and WandB logs.
 *   `dataset_path`, `cache_dir`: Paths for data and precomputed superpixels.
-*   `image_size`, `num_superpixels`, `slic_compactness`: Data preprocessing parameters.
-*   Model hyperparameters: `z_dim`, `g_channels`, `d_channels`, `g_num_gcn_blocks`, etc.
-*   Training hyperparameters: `batch_size`, `num_epochs`, learning rates (`g_lr`, `d_lr`), `r1_gamma`, etc.
+*   `image_size`: General image processing size.
+*   **Model Architecture Selection**:
+    *   `model.architecture`: Set to `"gan5_gcn"` or `"gan6_gat_cnn"` to choose the model type.
+*   **`gan5_gcn` specific parameters (under `model.`):**
+    *   `num_superpixels`, `slic_compactness` (used by `SuperpixelDataset` via top-level config forwarding by Trainer for now, or could be moved under `model.gan5_params`).
+    *   `z_dim`, `g_channels`, `g_num_gcn_blocks`, `d_channels`, etc.
+*   **`gan6_gat_cnn` specific parameters (under `model.`):**
+    *   `model.gan6_num_superpixels`, `model.gan6_slic_compactness` (used by `ImageToGraphDataset`).
+    *   `model.gat_dim`, `model.gat_heads`, `model.gat_layers`, `model.gan6_z_dim_graph_encoder_output`.
+    *   `model.gan6_z_dim_noise`, `model.gan6_gen_init_size`, `model.gan6_gen_feat_start`.
+    *   `model.gan6_d_feat_start`, `model.gan6_d_final_conv_size`.
+*   Training hyperparameters: `batch_size`, `num_epochs`, learning rates (`g_lr`, `d_lr`), `r1_gamma`, etc. (Note: For `gan6`, `g_lr` is used for both G and E optimizers).
 *   Logging: `use_wandb`, `log_freq_step`, `sample_freq_epoch`.
 *   FID Calculation: `enable_fid_calculation`, `fid_num_images`, `fid_batch_size`, `fid_freq_epoch`.
+*   **Example for `gan6`**: Refer to `configs/experiment_gan6_config.yaml`.
 
 ## Training
 
@@ -124,16 +145,16 @@ python scripts/train.py --config_file configs/your_experiment_config.yaml --resu
 
 ## Superpixel Caching
 
-*   The `SuperpixelDataset` precomputes superpixel segmentations and adjacency matrices.
-*   These are cached in the directory specified by `config.cache_dir` (within which a subdirectory like `sp_<num_superpixels>_is_<image_size>` is created).
+*   The dataset classes (`SuperpixelDataset` for `gan5_gcn`, `ImageToGraphDataset` for `gan6_gat_cnn`) handle caching of precomputed data.
+    *   For `gan5_gcn`: Segmentations and adjacency matrices are cached in `config.cache_dir/sp_<num_superpixels>_is_<image_size>/`.
+    *   For `gan6_gat_cnn`: PyTorch Geometric `Data` objects (graphs) are cached in `config.cache_dir/pyg_graphs_sp<model.gan6_num_superpixels>_slic<model.gan6_slic_compactness>_is<image_size>/`.
 *   If the cache directory is not found or seems incomplete for the current image paths and parameters, precomputation will run automatically. This can take time for large datasets.
-*   The cache is specific to `num_superpixels` and `image_size`. If you change these parameters, a new cache will be generated.
+*   The cache is specific to the dataset parameters. If you change these parameters (e.g., `num_superpixels`, `image_size`), a new cache will be generated.
 
 ## Further Development
 
 *   **More Sophisticated Model Variants**:
-    *   Integrate ideas from `legacy/gan6.py` (Graph Encoder producing `z_graph`). This is a planned next step.
-    *   Explore different GCN architectures or attention mechanisms.
+    *   Explore different GCN/GAT architectures or attention mechanisms.
 *   **Advanced Data Augmentation (ADA)**.
 *   **Hyperparameter Optimization**: Use tools like WandB Sweeps or Optuna.
 *   **Unit and Integration Tests**: Add tests for data loading, model components, and the training loop.

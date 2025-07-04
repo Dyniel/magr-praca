@@ -372,4 +372,168 @@ class Generator(nn.Module): # type: ignore
 
         return torch.tanh(output_image)
 
+
+# --- Models for gan6 architecture (Graph Encoder + CNN Generator) ---
+from src.utils import PYG_AVAILABLE # To check if PyG is installed
+
+if PYG_AVAILABLE:
+    from torch_geometric.nn import GATv2Conv, global_mean_pool
+else:
+    # Placeholders if PyG is not installed, so the file can be imported.
+    # Actual model instantiation will fail in Trainer if PYG_AVAILABLE is False and gan6 is selected.
+    class GATv2Conv: pass
+    def global_mean_pool(x, batch): return x
+
+
+class GraphEncoderGAT(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        if not PYG_AVAILABLE:
+            raise ImportError("PyTorch Geometric is required for GraphEncoderGAT.")
+
+        self.config = config
+        # Node features are [R,G,B] = 3 dimensions
+        in_node_dim = 3
+
+        self.convs = nn.ModuleList()
+        current_dim = in_node_dim
+        for _ in range(config.model.gat_layers):
+            self.convs.append(
+                GATv2Conv(
+                    current_dim,
+                    config.model.gat_dim,
+                    heads=config.model.gat_heads,
+                    concat=False, # As in legacy/gan6.py, heads are averaged
+                    dropout=config.model.gat_dropout # Add dropout if specified
+                )
+            )
+            current_dim = config.model.gat_dim
+
+        # Output projection to the desired graph embedding dimension
+        self.lin = nn.Linear(config.model.gat_dim, config.model.gan6_z_dim_graph_encoder_output)
+
+    def forward(self, graph_batch):
+        """
+        Args:
+            graph_batch (torch_geometric.data.Batch): Batch of graph data.
+        """
+        x, edge_index, batch_vector = graph_batch.x, graph_batch.edge_index, graph_batch.batch
+
+        for conv_layer in self.convs:
+            x = F.elu(conv_layer(x, edge_index))
+            # Dropout can be applied here if needed, after activation
+            # x = F.dropout(x, p=self.config.model.gat_dropout, training=self.training)
+
+        # Global mean pooling to get one vector per graph in the batch
+        graph_embeddings = global_mean_pool(x, batch_vector) # [B, gat_dim]
+
+        z_graph = self.lin(graph_embeddings) # [B, gan6_z_dim_graph_encoder_output]
+        return z_graph
+
+
+class GeneratorCNN(nn.Module): # For gan6 architecture
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.image_size = config.image_size
+        self.init_size = config.model.gan6_gen_init_size # e.g., 4
+
+        # Combined z_dim: output from GraphEncoder + noise_z
+        combined_z_dim = config.model.gan6_z_dim_graph_encoder_output + config.model.gan6_z_dim_noise
+
+        self.proj = nn.Linear(combined_z_dim, config.model.gan6_gen_feat_start * (self.init_size ** 2))
+
+        num_upsamplings = int(math.log2(self.image_size / self.init_size))
+
+        current_channels = config.model.gan6_gen_feat_start # e.g., 512
+
+        self.upsampling_blocks = nn.ModuleList()
+        for i in range(num_upsamplings):
+            out_channels = current_channels // 2
+            self.upsampling_blocks.append(
+                nn.Sequential(
+                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                    # Using WSConv2d for consistency, or standard Conv2d
+                    WSConv2d(current_channels, out_channels, kernel_size=3, stride=1, padding=1,
+                             use_spectral_norm=config.model.gan6_gen_spectral_norm),
+                    nn.LeakyReLU(0.2, inplace=True),
+                    WSConv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1,
+                             use_spectral_norm=config.model.gan6_gen_spectral_norm),
+                    nn.LeakyReLU(0.2, inplace=True),
+                )
+            )
+            current_channels = out_channels
+
+        self.to_rgb = WSConv2d(current_channels, 3, kernel_size=1, stride=1, padding=0,
+                               use_spectral_norm=config.model.gan6_gen_spectral_norm)
+
+    def forward(self, z_graph, batch_size):
+        """
+        Args:
+            z_graph (Tensor): Graph embedding from GraphEncoder [B, gan6_z_dim_graph_encoder_output].
+            batch_size (int): Current batch size to generate noise.
+        """
+        z_noise = torch.randn(batch_size, self.config.model.gan6_z_dim_noise, device=z_graph.device)
+        combined_z = torch.cat([z_graph, z_noise], dim=1) # [B, combined_z_dim]
+
+        x = self.proj(combined_z) # [B, C_start * init_size^2]
+        x = x.view(batch_size, self.config.model.gan6_gen_feat_start, self.init_size, self.init_size)
+
+        for block in self.upsampling_blocks:
+            x = block(x)
+
+        image = torch.tanh(self.to_rgb(x)) # Output [-1, 1]
+        return image
+
+
+class DiscriminatorCNN(nn.Module): # For gan6 architecture
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.image_size = config.image_size
+
+        layers = []
+        in_channels = 3
+        current_channels = config.model.gan6_d_feat_start # e.g., 64
+
+        # Number of downsampling layers determined by image size and desired final feature map size
+        # legacy/gan6 had 4 downsampling layers (4,2,1 convs) for 256 -> 256/16 = 16
+        # For image_size = 256, final_size = 4, means 256 -> 128 -> 64 -> 32 -> 16 -> 8 -> 4 (6 layers if kernel 4, stride 2)
+        # legacy/gan6 used kernel 4, stride 2, padding 1. This reduces size by half.
+        # For 256 image, 4 layers: 256->128->64->32->16. Final map size is 16x16.
+
+        num_downsampling_layers = int(math.log2(self.image_size / config.model.gan6_d_final_conv_size)) # e.g. log2(256/16) = 4 for legacy
+
+        for i in range(num_downsampling_layers):
+            out_channels = current_channels * 2 if i < 3 else current_channels # Cap channels like StyleGAN D
+            # legacy/gan6 D: feats = [d, d*2, d*4, d*8]. So always doubles.
+            out_channels = current_channels * 2
+
+            layers.append(
+                WSConv2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1,
+                         use_spectral_norm=config.model.gan6_d_spectral_norm)
+            )
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            in_channels = out_channels
+            current_channels = out_channels
+
+        self.conv_net = nn.Sequential(*layers)
+
+        # Calculate feature map size after convolutions
+        # Each (K=4,S=2,P=1) layer halves spatial dim.
+        final_feature_map_size = self.image_size // (2**num_downsampling_layers)
+
+        fc_input_features = current_channels * (final_feature_map_size ** 2)
+        self.fc = nn.Linear(fc_input_features, 1)
+        if config.model.gan6_d_spectral_norm_fc: # Separate flag for FC spectral norm
+            self.fc = spectral_norm(self.fc)
+
+
+    def forward(self, image):
+        x = self.conv_net(image)
+        x = x.view(x.size(0), -1) # Flatten
+        logits = self.fc(x)
+        return logits.squeeze(1) # Output [B] for BCEWithLogitsLoss
+
+
 print("src/models.py created and populated with Generator, Discriminator, and helper modules.")

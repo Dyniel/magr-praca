@@ -117,9 +117,12 @@ def save_checkpoint(state, is_best, filename="checkpoint.pth.tar", best_filename
     if is_best:
         shutil.copyfile(filename, best_filename)
 
-def load_checkpoint(checkpoint_path, model_g, model_d, optimizer_g=None, optimizer_d=None, device='cpu'):
+def load_checkpoint(checkpoint_path, model_g, model_d, model_e=None,
+                    optimizer_g=None, optimizer_d=None, optimizer_e=None,
+                    device='cpu'):
     """
-    Loads model and optimizer states from a checkpoint file for Generator and Discriminator.
+    Loads model and optimizer states from a checkpoint file.
+    Handles optional Encoder model (model_e) and its optimizer (optimizer_e) for gan6.
     Returns the epoch and step to resume from.
     """
     if not os.path.exists(checkpoint_path):
@@ -127,33 +130,48 @@ def load_checkpoint(checkpoint_path, model_g, model_d, optimizer_g=None, optimiz
         return 0, 0 # Default to starting from scratch
 
     print(f"Loading checkpoint from {checkpoint_path}...")
-    # Load checkpoint to the specified device to avoid issues if saved on GPU and loading on CPU
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    if 'G_state_dict' in checkpoint:
+    # Load Generator
+    if 'G_state_dict' in checkpoint and model_g is not None:
         model_g.load_state_dict(checkpoint['G_state_dict'])
-    else:
-        print("Warning: Generator state_dict not found in checkpoint.")
-        return 0,0
+    elif model_g is not None:
+        print("Warning: Generator state_dict (G_state_dict) not found in checkpoint.")
+        # return 0,0 # Or allow partial load? For now, require G and D.
 
-    if 'D_state_dict' in checkpoint:
+    # Load Discriminator
+    if 'D_state_dict' in checkpoint and model_d is not None:
         model_d.load_state_dict(checkpoint['D_state_dict'])
-    else:
-        print("Warning: Discriminator state_dict not found in checkpoint.")
-        return 0,0
+    elif model_d is not None:
+        print("Warning: Discriminator state_dict (D_state_dict) not found in checkpoint.")
+        # return 0,0
 
+    # Load Encoder (optional, for gan6)
+    if model_e is not None: # Only try to load if model_e is provided
+        if 'E_state_dict' in checkpoint:
+            model_e.load_state_dict(checkpoint['E_state_dict'])
+        else:
+            print("Warning: Encoder state_dict (E_state_dict) not found in checkpoint, but an Encoder model was provided.")
+
+    # Load Optimizers
     if optimizer_g and 'optG_state_dict' in checkpoint:
         optimizer_g.load_state_dict(checkpoint['optG_state_dict'])
     elif optimizer_g:
-        print("Warning: Generator optimizer state_dict not found in checkpoint.")
+        print("Warning: Generator optimizer state_dict (optG_state_dict) not found in checkpoint.")
 
     if optimizer_d and 'optD_state_dict' in checkpoint:
         optimizer_d.load_state_dict(checkpoint['optD_state_dict'])
     elif optimizer_d:
-        print("Warning: Discriminator optimizer state_dict not found in checkpoint.")
+        print("Warning: Discriminator optimizer state_dict (optD_state_dict) not found in checkpoint.")
+
+    if optimizer_e and model_e is not None: # Only try to load if optimizer_e and model_e are provided
+        if 'optE_state_dict' in checkpoint:
+            optimizer_e.load_state_dict(checkpoint['optE_state_dict'])
+        else:
+            print("Warning: Encoder optimizer state_dict (optE_state_dict) not found in checkpoint, but an Encoder optimizer was provided.")
 
     start_epoch = checkpoint.get('epoch', 0)
-    current_step = checkpoint.get('step', 0) # Renamed from 'current_step' for clarity
+    current_step = checkpoint.get('step', 0)
 
     # If resuming, typically start from the next epoch
     # However, if saving mid-epoch, step is more accurate.
@@ -239,5 +257,94 @@ class ResizePIL:
 
     def __call__(self, pil_image):
         return pil_image.resize(self.size, self.interpolation)
+
+# --- PyTorch Geometric Related Utilities (for gan6 architecture) ---
+try:
+    from torch_geometric.data import Data
+    import skimage.graph as skgraph # For RAG
+    PYG_AVAILABLE = True
+except ImportError:
+    PYG_AVAILABLE = False
+    # print("Warning: PyTorch Geometric or scikit-image not fully available. Graph conversion utilities might fail.")
+    Data = None # Define Data as None or a placeholder if pyg not installed
+    skgraph = None
+
+
+def convert_image_to_pyg_graph(image_numpy_array_01, num_superpixels, slic_compactness=10, feature_type='mean_color'):
+    """
+    Converts a single image (as NumPy array in [0,1] range) to a PyTorch Geometric Data object.
+
+    Args:
+        image_numpy_array_01 (np.ndarray): Input image as a NumPy array (H, W, C), values in [0, 1].
+        num_superpixels (int): Target number of superpixels.
+        slic_compactness (float): Compactness parameter for SLIC.
+        feature_type (str): Type of node features to extract ('mean_color').
+
+    Returns:
+        torch_geometric.data.Data: Graph object with 'x' (node features) and 'edge_index'.
+                                   Returns None if PyG or skimage.graph is not available.
+    """
+    if not PYG_AVAILABLE or Data is None or skgraph is None:
+        raise ImportError("PyTorch Geometric or scikit-image.graph is required for graph conversion.")
+
+    # 1. SLIC Superpixels
+    # slic expects float image in range [0,1] or [-1,1], skimage.util.img_as_float handles this.
+    # Our input image_numpy_array_01 is already in [0,1]
+    spx_labels = slic(image_numpy_array_01, n_segments=num_superpixels, compactness=slic_compactness, start_label=0)
+
+    # Relabel to ensure contiguous labels from 0 to N-1, where N is actual number of superpixels
+    # This is important because max(spx_labels) might be < num_superpixels
+    # And after relabel_sequential, the number of unique labels is what matters.
+    # spx_labels, _, _ = relabel_sequential(spx_labels) # gan6 did not do this, but it's safer.
+    # Let's stick to gan6 logic for now: it used spx.max() + 1 for node count.
+    # However, it also did `counts = np.bincount(spx.flatten())` which would correctly size up to max label.
+    # And features were `feats = np.zeros((n_nodes, 3))` where n_nodes = spx.max() + 1
+    # This implies labels might not be contiguous from 0.
+    # For PyG, it's generally better if node indices are 0 to N-1.
+    # Let's assume SLIC output + start_label=0 gives reasonable labels, but bincount handles gaps.
+    # The RAG construction in skimage also handles non-contiguous labels by finding unique ones.
+
+    num_actual_nodes = np.max(spx_labels) + 1
+
+    # 2. Node Features (e.g., mean color)
+    if feature_type == 'mean_color':
+        node_features = np.zeros((num_actual_nodes, image_numpy_array_01.shape[2]), dtype=np.float32)
+        # Efficiently calculate mean color for each superpixel
+        for c in range(image_numpy_array_01.shape[2]): # Iterate over color channels
+            channel_sum_per_superpixel = np.bincount(spx_labels.flatten(), weights=image_numpy_array_01[..., c].flatten(), minlength=num_actual_nodes)
+            pixel_counts_per_superpixel = np.bincount(spx_labels.flatten(), minlength=num_actual_nodes)
+
+            # Avoid division by zero for superpixels that might not have any pixels (if any)
+            valid_mask = pixel_counts_per_superpixel > 0
+            node_features[valid_mask, c] = channel_sum_per_superpixel[valid_mask] / pixel_counts_per_superpixel[valid_mask]
+    else:
+        raise ValueError(f"Unsupported feature_type: {feature_type}")
+
+    # 3. Edges from Region Adjacency Graph (RAG)
+    # rag_mean_color also computes mean colors, but we did it above for flexibility.
+    # We only need edges from it.
+    # skimage.graph.rag_mean_color builds graph based on unique labels in spx_labels.
+    # The node IDs in rag.edges will correspond to these unique labels.
+    # If spx_labels are not 0..N-1 contiguous, rag will map them. We need to ensure consistency.
+    # Let's re-evaluate gan6's RAG usage:
+    # `rag = skgraph.rag_mean_color(img_np, spx)`
+    # `edges = np.array([[u, v] for u, v in rag.edges()], dtype=np.int64)`
+    # This implies node IDs `u,v` are directly from SLIC labels.
+    # So, if SLIC produces labels 0, 1, 3 (missing 2), then `rag` uses these.
+    # Features were `feats = np.zeros((spx.max() + 1, 3))`. This is fine.
+
+    rag = skgraph.rag_mean_color(image_numpy_array_01, spx_labels) # Pass image_numpy_array_01
+
+    # Edges are typically stored as [2, num_edges] in PyG
+    if len(rag.edges) > 0:
+        edge_list = np.array(list(rag.edges), dtype=np.int64).T
+    else:
+        edge_list = np.empty((2, 0), dtype=np.int64)
+
+    edge_index = torch.from_numpy(edge_list)
+    x = torch.from_numpy(node_features)
+
+    return Data(x=x, edge_index=edge_index)
+
 
 print("src/utils.py created and populated.")
