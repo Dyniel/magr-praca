@@ -56,29 +56,30 @@ This project implements a Generative Adversarial Network (GAN) that is condition
     ```
 
 3.  **Install dependencies:**
-    It's recommended to create a `requirements.txt` file. Key dependencies include:
-    *   `torch`
+    A `requirements.txt` file is provided. Install the dependencies using:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    If you encounter issues, especially with `torch-geometric`, refer to the manual installation notes below.
+
+    **Key Dependencies (for manual installation or reference):**
+    *   `torch>=1.10` (tested with 1.13.1)
     *   `torchvision`
     *   `numpy`
     *   `scikit-image`
     *   `Pillow`
-    *   `omegaconf`
+    *   `omegaconf>=2.1`
     *   `tqdm`
-    *   `wandb` (optional, for logging)
+    *   `wandb` (for logging, optional if `use_wandb=False`)
     *   `pytorch-fid` (for FID calculation)
     *   `torch-geometric` (required for `gan6_gat_cnn` architecture)
-    ```bash
-    pip install torch torchvision numpy scikit-image Pillow omegaconf tqdm wandb pytorch-fid
-    ```
-    *   **For PyTorch Geometric (`torch-geometric`):** Installation can be version-sensitive with PyTorch and CUDA. Follow the official instructions at [PyTorch Geometric's documentation](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html). An example command might look like:
-        ```bash
-        # Replace ${TORCH} and ${CUDA} with your PyTorch and CUDA versions (e.g., 1.13.1 and cu117)
-        # Example for PyTorch 1.13.1 and CUDA 11.7:
-        # pip install torch_geometric torch_sparse torch_scatter torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-1.13.1+cu117.html
 
-        # Check the PyG website for the correct command for your specific PyTorch/CUDA setup.
-        # pip install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+    *   **Manual Installation for PyTorch Geometric (`torch-geometric`):** Installation can be version-sensitive with PyTorch and CUDA. Follow the official instructions at [PyTorch Geometric's documentation](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html). You'll need to identify your PyTorch version and CUDA version (if using GPU). For example, if you have PyTorch 1.13.1 and CUDA 11.7, the command might be:
+        ```bash
+        pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-1.13.1+cu117.html
+        pip install torch_geometric
         ```
+        *Always check the PyG website for the most up-to-date commands for your specific environment.*
 
 4.  **Dataset:**
     *   Download or prepare your image dataset.
@@ -114,27 +115,46 @@ Key configuration aspects:
 
 ## Training
 
-To start training, run the `scripts/train.py` script:
+To start training, run the `scripts/train.py` script. You'll need to specify a configuration file.
+
+**Example for a "Proper" Experiment (using `gan5_gcn` defaults from `experiment_config.yaml`):**
+
+This command uses the settings in `configs/experiment_config.yaml` (which we've updated to use all images, 250 epochs, batch size 8, and enabled Weights & Biases).
 
 ```bash
-python scripts/train.py --config_file configs/your_experiment_config.yaml [additional_overrides]
+python -m scripts.train --config_file configs/experiment_config.yaml
 ```
 
-**Arguments:**
+**Customizing and Overriding:**
 
 *   `--config_file <path>`: Path to your experiment's YAML configuration file.
-    (Defaults to `configs/experiment_config.yaml`).
-*   `[additional_overrides]`: Optional command-line overrides for configuration parameters, in `key=value` format.
-    For example: `python scripts/train.py batch_size=8 num_epochs=10`
+    *   For `gan5_gcn` based experiments, start with `configs/experiment_config.yaml`.
+    *   For `gan6_gat_cnn` based experiments, start with `configs/experiment_gan6_config.yaml`.
+*   `[additional_overrides]`: Optional command-line overrides for any configuration parameter, in `key=value` format. These will take precedence over values in the YAML file.
+    For example, for a quick debug run with few epochs and images, and wandb disabled:
+    ```bash
+    python -m scripts.train --config_file configs/experiment_config.yaml num_epochs=5 debug_num_images=10 use_wandb=False
+    ```
 
-**To resume training from a checkpoint:**
+**Enabling/Disabling Weights & Biases (WandB):**
 
-```bash
-python scripts/train.py --config_file configs/your_experiment_config.yaml --resume_from results/<project_name>/<run_name>/checkpoints/checkpoint_epoch_xxxx.pth.tar
-```
-*   The `--resume_from` argument specifies the path to the checkpoint file.
-*   You can also set `resume_checkpoint_path` in your YAML configuration file. The command-line argument takes precedence.
-*   Ensure that the configuration (especially model architecture) used for resuming is compatible with the checkpoint. The saved configuration within the checkpoint is for reference but not automatically reapplied.
+*   WandB logging is controlled by the `use_wandb` parameter in your configuration.
+*   It is set to `True` by default in `configs/base_config.py` and in the example experiment YAML files.
+*   To disable WandB for a specific run, add `use_wandb=False` to your command-line arguments.
+
+**Resuming Training:**
+
+To resume training from a saved checkpoint:
+1.  Set the `resume_checkpoint_path` in your YAML configuration file to the path of your `.pth.tar` checkpoint.
+    ```yaml
+    # In your_experiment_config.yaml
+    resume_checkpoint_path: "experiment_outputs/SuperpixelGAN_LungSCC_Experiment1/gan5_refactored_lr_1e-5_bs_8/checkpoints/checkpoint_epoch_0000.pth.tar" # Update with your actual project/run name and epoch
+    ```
+2.  Then run the training script as usual with that config file:
+    ```bash
+    python -m scripts.train --config_file configs/your_experiment_config.yaml
+    ```
+*   Ensure that the configuration (especially model architecture and key dimensions) used for resuming is compatible with the checkpoint. The configuration saved within the checkpoint is primarily for reference.
 
 **Output:**
 

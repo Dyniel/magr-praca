@@ -12,7 +12,7 @@ run_name: "gan5_refactored_lr_1e-5_bs_8"
 image_size: 256
 num_superpixels: 200 # This is the global one, used by gan5 SuperpixelDataset
 slic_compactness: 15.0 # This is the global one, used by gan5 SuperpixelDataset
-# debug_num_images: 16 # For a quick test run
+debug_num_images: 0 # Set to 0 to use all images for a proper experiment
 
 # --- Model Configuration ---
 model:
@@ -41,6 +41,7 @@ beta1: 0.0
 beta2: 0.99
 r1_gamma: 5.0
 d_updates_per_g_update: 2
+gradient_accumulation_steps: 1 # Increase to trade computation for memory (effective_batch_size = batch_size * grad_accum_steps)
 
 # --- Logging and Evaluation ---
 use_wandb: True

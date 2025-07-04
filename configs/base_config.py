@@ -40,6 +40,7 @@ class BaseConfig:
     # d_steps_per_g_step: int = 2 # Number of D updates per G update (from gan5)
     # Let's rename for clarity:
     d_updates_per_g_update: int = 2
+    gradient_accumulation_steps: int = 1 # Number of steps to accumulate gradients before optimizer step
 
 
     # --- Logging and Evaluation ---

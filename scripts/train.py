@@ -1,5 +1,6 @@
 import os
 import torch
+import dataclasses
 import torch.optim as optim
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -185,18 +186,45 @@ class Trainer:
             self.D.train()
 
         loop = tqdm(self.dataloader, desc=f"Epoch [{self.current_epoch}/{self.config.num_epochs}]")
-        total_g_loss = 0.0
-        total_d_loss = 0.0
+
+        # Initialize accumulators for various loss components for logging
+        epoch_total_d_loss = 0.0
+        epoch_total_g_loss = 0.0
+        epoch_total_d_loss_adv = 0.0
+        epoch_total_r1_penalty = 0.0
+        epoch_d_real_logits_sum = 0.0
+        epoch_d_fake_logits_sum = 0.0
+        num_optimizer_steps_this_epoch = 0
+
+        # Zero gradients at the beginning of the epoch accumulation cycle
+        # Actual zeroing will happen after each optimizer step.
+        # For the very first step, ensure optimizers are zeroed.
+        self.optD.zero_grad(set_to_none=True)
+        self.optG.zero_grad(set_to_none=True)
+        if self.optE: self.optE.zero_grad(set_to_none=True)
+
+        # Accumulators for one effective batch (i.e., over gradient_accumulation_steps)
+        current_accum_d_loss = 0.0
+        current_accum_g_loss = 0.0
+        current_accum_d_loss_adv = 0.0
+        current_accum_r1_penalty = 0.0
+        current_accum_d_real_logits = 0.0
+        current_accum_d_fake_logits = 0.0
+        micro_batch_count_for_accum = 0
 
         for batch_idx, raw_batch_data in enumerate(loop):
-            lossD = torch.tensor(0.0, device=self.device)
-            lossG = torch.tensor(0.0, device=self.device)
-            lossD_adv = torch.tensor(0.0, device=self.device)
-            r1_penalty = torch.tensor(0.0, device=self.device)
-            d_real_logits_mean = torch.tensor(0.0, device=self.device)
-            d_fake_logits_mean = torch.tensor(0.0, device=self.device)
-            current_batch_size = 0
+            # Per micro-batch losses (will be scaled for backward)
+            lossD_micro = torch.tensor(0.0, device=self.device)
+            lossG_micro = torch.tensor(0.0, device=self.device)
+            lossD_adv_micro = torch.tensor(0.0, device=self.device)
+            r1_penalty_micro = torch.tensor(0.0, device=self.device)
+            d_real_logits_mean_micro = torch.tensor(0.0, device=self.device)
+            d_fake_logits_mean_micro = torch.tensor(0.0, device=self.device)
+            current_batch_size = 0 # Micro-batch size
 
+            grad_accum_steps = self.config.gradient_accumulation_steps
+
+            # --- Discriminator Training ---
             if self.model_architecture == "gan5_gcn":
                 if not (isinstance(raw_batch_data, dict) and all(
                         k in raw_batch_data for k in ["image", "segments", "adj"])):
@@ -208,35 +236,51 @@ class Trainer:
                 current_batch_size = real_images.size(0)
                 if current_batch_size == 0: continue
 
+                # The d_updates_per_g_update loop means D is trained more for each micro-batch of G
+                # Gradients for D will be accumulated across these inner updates AND across micro-batches
                 for _ in range(self.config.d_updates_per_g_update):
-                    self.optD.zero_grad()
                     z = torch.randn(current_batch_size, self.config.model.z_dim, device=self.device)
                     with torch.no_grad():
                         fake_images = self.G(z, real_images, segments_map, adj_matrix)
 
                     d_real_logits = self.D(real_images)
                     d_fake_logits = self.D(fake_images.detach())
-                    lossD_adv = self.loss_fn_d(d_real_logits, d_fake_logits)
+                    lossD_adv_iteration = self.loss_fn_d(d_real_logits, d_fake_logits)
 
                     real_images.requires_grad_(True)
                     d_real_logits_for_gp = self.D(real_images)
-                    r1_penalty = self._r1_gradient_penalty(real_images, d_real_logits_for_gp)
+                    r1_penalty_iteration = self._r1_gradient_penalty(real_images, d_real_logits_for_gp)
                     real_images.requires_grad_(False)
 
-                    lossD = lossD_adv + self.config.r1_gamma * 0.5 * r1_penalty
-                    lossD.backward()
-                    self.optD.step()
+                    lossD_iteration = lossD_adv_iteration + self.config.r1_gamma * 0.5 * r1_penalty_iteration
 
-                d_real_logits_mean = d_real_logits.mean()
-                d_fake_logits_mean = d_fake_logits.mean()
+                    # Scale loss for gradient accumulation
+                    lossD_scaled = lossD_iteration / grad_accum_steps
+                    lossD_scaled.backward() # Accumulate gradients for D
 
-                self.optG.zero_grad()
+                    # Accumulate unscaled losses for logging for this micro-batch's D part
+                    lossD_adv_micro += lossD_adv_iteration.item()
+                    r1_penalty_micro += r1_penalty_iteration.item()
+                    lossD_micro += lossD_iteration.item()
+
+                # Average over d_updates_per_g_update for this micro_batch's D part
+                lossD_adv_micro /= self.config.d_updates_per_g_update
+                r1_penalty_micro /= self.config.d_updates_per_g_update
+                lossD_micro /= self.config.d_updates_per_g_update
+                # Logits are from the last D update in the inner loop for this micro_batch
+                d_real_logits_mean_micro = d_real_logits.mean()
+                d_fake_logits_mean_micro = d_fake_logits.mean()
+
+                # --- Generator Training ---
                 z = torch.randn(current_batch_size, self.config.model.z_dim, device=self.device)
                 fake_images_for_g = self.G(z, real_images, segments_map, adj_matrix)
                 d_fake_for_g_logits = self.D(fake_images_for_g)
-                lossG = self.loss_fn_g(d_fake_for_g_logits)
-                lossG.backward()
-                self.optG.step()
+                lossG_micro_val = self.loss_fn_g(d_fake_for_g_logits)
+
+                lossG_scaled = lossG_micro_val / grad_accum_steps
+                lossG_scaled.backward() # Accumulate gradients for G
+                lossG_micro = lossG_micro_val.item()
+
 
             elif self.model_architecture == "gan6_gat_cnn":
                 if not (isinstance(raw_batch_data, tuple) and len(raw_batch_data) == 2):
@@ -248,59 +292,119 @@ class Trainer:
                 current_batch_size = real_images.size(0)
                 if current_batch_size == 0: continue
 
-                self.optD.zero_grad()
+                # --- Discriminator Training ---
                 real_images.requires_grad_(True)
                 d_real_logits = self.D(real_images)
                 with torch.no_grad():
                     z_graph = self.E(graph_batch_pyg)
                     fake_images = self.G(z_graph, current_batch_size)
                 d_fake_logits = self.D(fake_images.detach())
-                lossD_adv = self.loss_fn_d(d_real_logits, d_fake_logits)
-                r1_penalty = self._r1_gradient_penalty(real_images, d_real_logits)
+
+                lossD_adv_micro_val = self.loss_fn_d(d_real_logits, d_fake_logits)
+                r1_penalty_micro_val = self._r1_gradient_penalty(real_images, d_real_logits)
                 real_images.requires_grad_(False)
-                lossD = lossD_adv + self.config.r1_gamma * 0.5 * r1_penalty
-                lossD.backward()
-                self.optD.step()
+                lossD_micro_val = lossD_adv_micro_val + self.config.r1_gamma * 0.5 * r1_penalty_micro_val
 
-                d_real_logits_mean = d_real_logits.mean()
-                d_fake_logits_mean = d_fake_logits.mean()
+                lossD_scaled = lossD_micro_val / grad_accum_steps
+                lossD_scaled.backward() # Accumulates gradients for D
 
-                self.optE.zero_grad()
-                self.optG.zero_grad()
+                lossD_adv_micro = lossD_adv_micro_val.item()
+                r1_penalty_micro = r1_penalty_micro_val.item()
+                lossD_micro = lossD_micro_val.item()
+                d_real_logits_mean_micro = d_real_logits.mean()
+                d_fake_logits_mean_micro = d_fake_logits.mean()
+
+                # --- Generator & Encoder Training ---
                 z_graph_for_g = self.E(graph_batch_pyg)
                 fake_images_for_g = self.G(z_graph_for_g, current_batch_size)
                 d_fake_for_g_logits = self.D(fake_images_for_g)
-                lossG_and_E = self.loss_fn_g(d_fake_for_g_logits)
-                lossG_and_E.backward()
+                lossG_and_E_micro_val = self.loss_fn_g(d_fake_for_g_logits)
+
+                lossG_E_scaled = lossG_and_E_micro_val / grad_accum_steps
+                lossG_E_scaled.backward() # Accumulates gradients for G and E
+                lossG_micro = lossG_and_E_micro_val.item()
+
+            # Accumulate losses for the effective batch
+            current_accum_d_loss += lossD_micro
+            current_accum_g_loss += lossG_micro
+            current_accum_d_loss_adv += lossD_adv_micro
+            current_accum_r1_penalty += r1_penalty_micro
+            current_accum_d_real_logits += d_real_logits_mean_micro.item()
+            current_accum_d_fake_logits += d_fake_logits_mean_micro.item()
+            micro_batch_count_for_accum += 1
+
+            # Perform optimizer step if accumulation is complete
+            if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(self.dataloader):
+                self.optD.step()
                 self.optG.step()
-                self.optE.step()
-                lossG = lossG_and_E
+                if self.optE: self.optE.step()
 
-            total_d_loss += lossD.item()
-            total_g_loss += lossG.item()
+                self.optD.zero_grad(set_to_none=True)
+                self.optG.zero_grad(set_to_none=True)
+                if self.optE: self.optE.zero_grad(set_to_none=True)
 
-            if self.current_step % self.config.log_freq_step == 0:
-                log_data = {
-                    "Epoch": self.current_epoch,
-                    "Step": self.current_step,
-                    "Loss_D": lossD.item(),
-                    "Loss_D_Adv": lossD_adv.item(),
-                    "R1_Penalty": r1_penalty.item(),
-                    "Loss_G": lossG.item(),
-                    "D_Real_Logits_Mean": d_real_logits_mean.item(),
-                    "D_Fake_Logits_Mean": d_fake_logits_mean.item(),
-                }
-                log_to_wandb(self.wandb_run, log_data, step=self.current_step)
-                loop.set_postfix(log_data)
+                num_optimizer_steps_this_epoch +=1
 
-            self.current_step += 1
+                # Log metrics for this effective batch
+                avg_d_loss_accum = current_accum_d_loss / micro_batch_count_for_accum
+                avg_g_loss_accum = current_accum_g_loss / micro_batch_count_for_accum
+                avg_d_loss_adv_accum = current_accum_d_loss_adv / micro_batch_count_for_accum
+                avg_r1_penalty_accum = current_accum_r1_penalty / micro_batch_count_for_accum
+                avg_d_real_logits_accum = current_accum_d_real_logits / micro_batch_count_for_accum
+                avg_d_fake_logits_accum = current_accum_d_fake_logits / micro_batch_count_for_accum
 
-        avg_d_loss = total_d_loss / len(self.dataloader) if len(self.dataloader) > 0 else 0
-        avg_g_loss = total_g_loss / len(self.dataloader) if len(self.dataloader) > 0 else 0
-        print(f"Epoch {self.current_epoch} finished. Avg D Loss: {avg_d_loss:.4f}, Avg G Loss: {avg_g_loss:.4f}")
-        log_to_wandb(self.wandb_run,
-                     {"Epoch_Avg_D_Loss": avg_d_loss, "Epoch_Avg_G_Loss": avg_g_loss, "Epoch": self.current_epoch},
-                     step=self.current_step)
+                epoch_total_d_loss += current_accum_d_loss
+                epoch_total_g_loss += current_accum_g_loss
+                epoch_total_d_loss_adv += current_accum_d_loss_adv
+                epoch_total_r1_penalty += current_accum_r1_penalty
+                epoch_d_real_logits_sum += current_accum_d_real_logits
+                epoch_d_fake_logits_sum += current_accum_d_fake_logits
+
+                if self.current_step % self.config.log_freq_step == 0:
+                    log_data = {
+                        "Epoch": self.current_epoch,
+                        "Step": self.current_step, # This is optimizer step
+                        "Loss_D": avg_d_loss_accum,
+                        "Loss_D_Adv": avg_d_loss_adv_accum,
+                        "R1_Penalty": avg_r1_penalty_accum,
+                        "Loss_G": avg_g_loss_accum,
+                        "D_Real_Logits_Mean": avg_d_real_logits_accum,
+                        "D_Fake_Logits_Mean": avg_d_fake_logits_accum,
+                    }
+                    log_to_wandb(self.wandb_run, log_data, step=self.current_step)
+                    loop.set_postfix(log_data)
+
+                self.current_step += 1 # Increment optimizer step counter
+
+                # Reset accumulators for the next effective batch
+                current_accum_d_loss = 0.0
+                current_accum_g_loss = 0.0
+                current_accum_d_loss_adv = 0.0
+                current_accum_r1_penalty = 0.0
+                current_accum_d_real_logits = 0.0
+                current_accum_d_fake_logits = 0.0
+                micro_batch_count_for_accum = 0
+
+        # Calculate and log epoch averages based on optimizer steps
+        if num_optimizer_steps_this_epoch > 0 :
+            avg_epoch_d_loss = epoch_total_d_loss / (num_optimizer_steps_this_epoch * grad_accum_steps)
+            avg_epoch_g_loss = epoch_total_g_loss / (num_optimizer_steps_this_epoch * grad_accum_steps)
+            # Note: The above averages might be slightly off if the last batch wasn't full.
+            # A more precise way is to average the per-step logged averages, or sum items from all micro_batches.
+            # For simplicity, using total items / total micro_batches processed in epoch.
+            total_micro_batches_in_epoch = len(self.dataloader)
+            avg_epoch_d_loss = epoch_total_d_loss / total_micro_batches_in_epoch if total_micro_batches_in_epoch > 0 else 0
+            avg_epoch_g_loss = epoch_total_g_loss / total_micro_batches_in_epoch if total_micro_batches_in_epoch > 0 else 0
+
+            print(f"Epoch {self.current_epoch} finished. Avg D Loss: {avg_epoch_d_loss:.4f}, Avg G Loss: {avg_epoch_g_loss:.4f}")
+            log_to_wandb(self.wandb_run,
+                        {"Epoch_Avg_D_Loss": avg_epoch_d_loss,
+                         "Epoch_Avg_G_Loss": avg_epoch_g_loss,
+                         "Epoch": self.current_epoch},
+                        step=self.current_step) # Log against the last optimizer step of the epoch
+        else:
+            print(f"Epoch {self.current_epoch} finished. No optimizer steps taken (dataloader might be empty or too short for accumulation).")
+
 
     def generate_samples(self, epoch, step):
         if not self.fixed_sample_batch:
@@ -528,7 +632,7 @@ class Trainer:
                     'D_state_dict': self.D.state_dict(),
                     'optG_state_dict': self.optG.state_dict(),
                     'optD_state_dict': self.optD.state_dict(),
-                    'config': OmegaConf.to_container(self.config, resolve=True)  # Save config as dict
+                    'config': dataclasses.asdict(self.config)  # Save config as dict
                 }
                 if self.model_architecture == "gan6_gat_cnn" and self.E is not None and self.optE is not None:
                     checkpoint_data['E_state_dict'] = self.E.state_dict()
@@ -542,3 +646,109 @@ class Trainer:
         print("Training finished.")
         if self.wandb_run:
             self.wandb_run.finish()
+
+
+if __name__ == "__main__":
+    import argparse
+    from omegaconf import OmegaConf
+    from configs.base_config import BaseConfig # Assuming BaseConfig is in configs.base_config
+
+    def main():
+        # --- Argument Parsing and Configuration Loading ---
+        parser = argparse.ArgumentParser(description="Train a GAN model.")
+        parser.add_argument("--config_file", type=str, default=None,
+                            help="Path to a YAML configuration file to override base defaults.")
+        # Allow unknown args for OmegaConf to parse as dot-list overrides
+        args, unknown_args = parser.parse_known_args()
+
+        # Start with the structured default config
+        conf = OmegaConf.structured(BaseConfig)
+
+        # Load config from YAML file if provided
+        if args.config_file:
+            try:
+                file_conf = OmegaConf.load(args.config_file)
+                conf = OmegaConf.merge(conf, file_conf)
+                print(f"Loaded configuration from {args.config_file}")
+            except FileNotFoundError:
+                print(f"Warning: Config file {args.config_file} not found. Using defaults and CLI overrides.")
+            except Exception as e:
+                print(f"Error loading config file {args.config_file}: {e}. Using defaults and CLI overrides.")
+
+
+        # Apply command-line overrides (e.g., batch_size=2 num_epochs=3)
+        # These need to be in the format: param.subparam=value or param=value
+        cli_conf_list = []
+        temp_dict = {}
+        for i in range(0, len(unknown_args), 2 if '=' in ''.join(unknown_args) else 1):
+            arg = unknown_args[i]
+            if '=' in arg: # handles param=value
+                cli_conf_list.append(arg)
+            elif i + 1 < len(unknown_args): # handles param value
+                cli_conf_list.append(f"{arg}={unknown_args[i+1]}")
+                # This part is tricky with current OmegaConf parsing from list of strings if not "key=value"
+                # For simplicity, we'll assume users will pass "key=value" for CLI overrides
+                # A more robust way would be to parse them into a dict first, then OmegaConf.from_dotlist or OmegaConf.from_dict
+            else:
+                print(f"Warning: Ignoring orphaned CLI argument: {arg}")
+
+        # Re-parse unknown_args assuming they are OmegaConf dot-list style (e.g., batch_size=2)
+        # The previous loop was a bit convoluted. OmegaConf can handle a list of "key=value" strings.
+        # Let's simplify the parsing of unknown_args for OmegaConf.
+        # We expect overrides like 'batch_size=2' 'num_epochs=3'
+
+        # Filter out any non-key-value pair arguments from unknown_args, like flags without values if any
+        # For example, if someone runs `python train.py batch_size=2 --some_flag num_epochs=3`
+        # OmegaConf expects a list of strings like ["batch_size=2", "num_epochs=3"]
+
+        # Let's refine the CLI override parsing.
+        # The original command was: python -m scripts.train --config_file configs/experiment_config.yaml batch_size=2 num_epochs=3 ...
+        # `unknown_args` would be ['batch_size=2', 'num_epochs=3', 'debug_num_images=4', 'use_wandb=False', 'num_workers=0']
+        # This format is directly consumable by OmegaConf.from_cli() or by merging with OmegaConf.from_dotlist()
+
+        if unknown_args:
+            try:
+                # OmegaConf.from_cli() is designed for sys.argv directly.
+                # For already parsed unknown_args (list of strings), OmegaConf.from_dotlist is more appropriate.
+                # However, OmegaConf.from_dotlist expects dot-separated paths for nested keys.
+                # The provided CLI arguments are simple key=value for top-level or direct model keys.
+                # OmegaConf.merge accepts multiple dicts or OmegaConf objects.
+                # We can create a new OmegaConf object from these CLI args.
+
+                # Let's try to create a dotlist from the unknown_args.
+                # Example: ['batch_size=2', 'model.z_dim=128']
+                # This is what OmegaConf.from_dotlist expects.
+                # The arguments `batch_size=2` are already in this format.
+
+                cli_overrides = OmegaConf.from_dotlist(unknown_args)
+                conf = OmegaConf.merge(conf, cli_overrides)
+                print(f"Applied CLI overrides: {unknown_args}")
+            except Exception as e:
+                print(f"Error applying CLI overrides: {e}")
+                parser.print_help()
+                return
+
+
+        # --- Trainer Initialization and Training ---
+        # Ensure the output directory defined in the config is created
+        # The Trainer class __init__ already does this with config.output_dir_run
+        # os.makedirs(conf.output_dir_run, exist_ok=True) # Not strictly needed here due to Trainer
+
+        print("Final configuration after merges:")
+        print(OmegaConf.to_yaml(conf))
+
+        try:
+            # Convert the OmegaConf object to an instance of the BaseConfig dataclass
+            # This ensures that __post_init__ is called.
+            conf = OmegaConf.to_object(conf)
+
+            trainer = Trainer(config=conf)
+            print("Trainer initialized. Starting training...")
+            trainer.train()
+        except Exception as e:
+            print(f"An error occurred during trainer initialization or training: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+    main()
