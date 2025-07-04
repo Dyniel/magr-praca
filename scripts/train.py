@@ -634,6 +634,10 @@ if __name__ == "__main__":
         print(OmegaConf.to_yaml(conf))
 
         try:
+            # Convert the OmegaConf object to an instance of the BaseConfig dataclass
+            # This ensures that __post_init__ is called.
+            conf = OmegaConf.to_object(conf)
+
             trainer = Trainer(config=conf)
             print("Trainer initialized. Starting training...")
             trainer.train()
