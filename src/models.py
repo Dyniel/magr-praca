@@ -94,51 +94,48 @@ class GCNBlock(nn.Module):
         return h
 
 
-class Generator(nn.Module):
+class Generator(nn.Module): # Was nn.Module
+    # This is the Generator for 'gan5_gcn' architecture
     def __init__(self, config):
         super().__init__()
-        self.config = config
-        self.num_superpixels = config.num_superpixels # Store for easy access in forward
+        self.config_model = config.model # Store model-specific sub-config
+        self.num_superpixels = config.num_superpixels # Top-level config
 
         # Input projection: (superpixel_color_features + z_dim) -> g_channels
         # Superpixel color features are 3 (RGB)
-        self.proj_input = WSConv2d(3 + config.z_dim, config.g_channels, kernel_size=1, padding=0,
-                                   use_spectral_norm=config.g_spectral_norm)
+        self.proj_input = WSConv2d(3 + self.config_model.z_dim, self.config_model.g_channels, kernel_size=1, padding=0,
+                                   use_spectral_norm=self.config_model.g_spectral_norm)
 
         self.gcn_blocks = nn.ModuleList()
-        for _ in range(config.g_num_gcn_blocks): # e.g., 8 blocks
+        for _ in range(self.config_model.g_num_gcn_blocks): # e.g., 8 blocks
             self.gcn_blocks.append(
                 GCNBlock(
-                    dim=config.g_channels,
-                    dropout_rate=config.g_dropout_rate,
-                    use_ada_in=config.g_ada_in,
-                    use_spectral_norm_conv=config.g_spectral_norm
+                    dim=self.config_model.g_channels,
+                    dropout_rate=self.config_model.g_dropout_rate,
+                    use_ada_in=self.config_model.g_ada_in,
+                    use_spectral_norm_conv=self.config_model.g_spectral_norm
                 )
             )
 
-        # Decoder / "Upsampler" (though it doesn't change spatial resolution in gan5)
-        # Takes GCN output [B, g_channels, S, 1], scatters to [B, g_channels, H, W]
-        # then processes to [B, 3, H, W]
+        # Decoder / "Upsampler"
         self.decoder = nn.Sequential(
-            WSConv2d(config.g_channels, config.g_channels // 2, kernel_size=3, padding=1, use_spectral_norm=config.g_spectral_norm),
+            WSConv2d(self.config_model.g_channels, self.config_model.g_channels // 2, kernel_size=3, padding=1, use_spectral_norm=self.config_model.g_spectral_norm),
             nn.LeakyReLU(0.2, inplace=True),
-            WSConv2d(config.g_channels // 2, 3, kernel_size=3, padding=1, use_spectral_norm=config.g_spectral_norm)
+            WSConv2d(self.config_model.g_channels // 2, 3, kernel_size=3, padding=1, use_spectral_norm=self.config_model.g_spectral_norm)
         )
 
-        # Output normalization (InstanceNorm was used in gan5)
-        if config.g_final_norm == 'instancenorm':
-            self.final_norm = nn.InstanceNorm2d(3, affine=False) # Affine false is common for GANs
-        elif config.g_final_norm == 'layernorm':
-             # LayerNorm needs to know the shape. Assuming H, W are known.
-             # This might be tricky if image_size can change dynamically without reinit.
-             # For now, let's stick to InstanceNorm or None.
-            self.final_norm = nn.InstanceNorm2d(3, affine=False) # Defaulting if layernorm chosen but not fully spec'd
+        if self.config_model.g_final_norm == 'instancenorm':
+            self.final_norm = nn.InstanceNorm2d(3, affine=False)
+        elif self.config_model.g_final_norm == 'layernorm':
+            self.final_norm = nn.InstanceNorm2d(3, affine=False) # Placeholder
             print("Warning: LayerNorm for Generator final_norm requested but not fully implemented, using InstanceNorm.")
         else: # 'none' or other
             self.final_norm = None
 
-
-    def forward(self, z, real_images, segments_map):
+    # The forward signature was corrected in the duplicate version.
+    # The original definition here is missing adj_matrix.
+    # I will use the signature from the (now removed) duplicate.
+    def forward(self, z, real_images, segments_map, adj_matrix): # Added adj_matrix
         """
         Args:
             z (Tensor): Latent noise vector [B, z_dim].
@@ -177,6 +174,7 @@ class Generator(nn.Module):
         z_replicated = z.view(B, 1, self.config.z_dim).expand(-1, S, -1)
 
         # Combined features: [B, S, 3 + z_dim]
+        z_replicated = z.view(B, 1, self.config_model.z_dim).expand(-1, S, -1) # Use config_model
         combined_superpixel_feats = torch.cat([mean_color_feats, z_replicated], dim=2)
 
         # Reshape for convolutional GCN blocks: [B, 3 + z_dim, S, 1]
@@ -186,45 +184,8 @@ class Generator(nn.Module):
         x = self.proj_input(x) # [B, g_channels, S, 1]
 
         # 4. Pass through GCN blocks
-        # This part needs the adjacency matrix A. It should come from the dataloader.
-        # Let's modify forward to accept A.
-        # The question is, where does A come from? The dataset loader.
-        # So, forward should be: def forward(self, z, real_images, segments_map, adj_matrix)
-        # For now, I'll assume adj_matrix is passed to forward.
-        # If not, GCNBlock cannot work as intended.
-        # The `gan5.py` GCNBlock took `A` as input.
-        # The `Trainer` in `gan5.py` passed `adj` from batch to `G(z, real, seg, adj)`.
-        # So, `adj_matrix` must be an input to this forward method.
-        # I will add it now.
-        # Error: `forward` signature changed, need to reflect this if called elsewhere.
-        # No, `gan5.py`'s Generator forward was: `forward(self, z, images, segments, A)`
-        # So `A` (adj_matrix) is already an argument. My previous comment was confused.
-        # The current signature is `forward(self, z, real_images, segments_map, adj_matrix)`
-        # which matches the intent.
-
-        # Adjacency matrix A is expected as input now.
-        # Let's assume the name is `adj_matrix` to match dataset output.
-        # So, the call in trainer will be self.G(z, real_images, segments_map, adj_matrix_from_batch)
-
-        # The GCNBlock in gan5 takes A.
-        # `def forward(self, x, A):`
-        # So when iterating self.gcn_blocks:
-        # `x = block(x, adj_matrix_from_batch)`
-
-        adj_matrix = None # Placeholder, this must be passed in.
-                          # This is a major flaw in my current thought process for model definition standalone.
-                          # The Generator's forward MUST take adj_matrix.
-                          # Let me correct the signature of Generator.forward properly.
-
-        # Corrected signature:
-        # def forward(self, z, real_images, segments_map, adj_matrix):
-
-        # Let's assume adj_matrix is passed as an argument.
-        # The following line is incorrect, adj_matrix is an argument to this function.
-        # adj_matrix = adj_matrix_from_batch # This would come from the trainer loop.
-
         for block in self.gcn_blocks:
-            x = block(x, adj_matrix) # adj_matrix must be [B, S, S]
+            x = block(x, adj_matrix) # adj_matrix is passed in from forward's arguments
 
         # x is now [B, g_channels, S, 1]
 
@@ -236,7 +197,7 @@ class Generator(nn.Module):
         pixel_level_feats = torch.bmm(one_hot_segments, processed_superpixel_feats)
 
         # Reshape to image-like tensor: [B, g_channels, H, W]
-        pixel_level_feats = pixel_level_feats.permute(0, 2, 1).view(B, self.config.g_channels, H, W)
+        pixel_level_feats = pixel_level_feats.permute(0, 2, 1).view(B, self.config_model.g_channels, H, W) # Use config_model
 
         # 6. Light decoder
         output_image = self.decoder(pixel_level_feats) # [B, 3, H, W]
@@ -248,49 +209,34 @@ class Generator(nn.Module):
         return torch.tanh(output_image) # Output in [-1, 1] range
 
 
-class Discriminator(nn.Module):
+class Discriminator(nn.Module): # For 'gan5_gcn' architecture
     def __init__(self, config):
         super().__init__()
-        self.config = config
-        d_channels = config.d_channels # Base number of channels for D
+        self.config_model = config.model # Store model-specific sub-config
+        d_channels = self.config_model.d_channels # Base number of channels for D
 
         layers = []
         # Initial conv: 3 -> d_channels
-        # In gan5: Conv2d(3, d, 3, padding=1) - no stride, so image size maintained
-        layers.append(WSConv2d(3, d_channels, kernel_size=3, stride=1, padding=1, use_spectral_norm=config.d_spectral_norm))
+        layers.append(WSConv2d(3, d_channels, kernel_size=3, stride=1, padding=1, use_spectral_norm=self.config_model.d_spectral_norm))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
-
-        # Strided convolutions to reduce spatial dimensions
-        # gan5: Conv2d(d, d * 2, 3, stride=2, padding=1) -> H/2, W/2
-        # gan5: Conv2d(d * 2, d * 4, 3, stride=2, padding=1) -> H/4, W/4
 
         current_channels = d_channels
-        # Example: if image_size=256, d_num_downsampling_layers = 2
-        # 256 -> 128 (d_channels * 2)
-        # 128 -> 64  (d_channels * 4)
-        # This matches gan5 structure.
-
-        # Let's make the number of downsampling layers configurable
-        # For now, hardcoding to match gan5:
 
         # Layer 1 (d -> d*2, H/2)
-        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1, use_spectral_norm=config.d_spectral_norm))
+        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1, use_spectral_norm=self.config_model.d_spectral_norm))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
-        current_channels *= 2 # Now d_channels * 2
+        current_channels *= 2
 
         # Layer 2 (d*2 -> d*4, H/4)
-        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1, use_spectral_norm=config.d_spectral_norm))
+        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1, use_spectral_norm=self.config_model.d_spectral_norm))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
-        current_channels *= 2 # Now d_channels * 4
+        current_channels *= 2
 
-        # Final layers from gan5: AdaptiveAvgPool2d(1), Flatten, Linear(d*4, 1)
-        layers.append(nn.AdaptiveAvgPool2d(1)) # Output: [B, current_channels, 1, 1]
-        layers.append(nn.Flatten()) # Output: [B, current_channels]
+        layers.append(nn.AdaptiveAvgPool2d(1))
+        layers.append(nn.Flatten())
 
-        # Final linear layer
-        # In gan5, spectral_norm was applied to this Linear layer too.
         final_linear_layer = nn.Linear(current_channels, 1)
-        if config.d_spectral_norm:
+        if self.config_model.d_spectral_norm: # d_spectral_norm also applies to linear layer in gan5
             layers.append(spectral_norm(final_linear_layer))
         else:
             layers.append(final_linear_layer)
@@ -298,9 +244,15 @@ class Discriminator(nn.Module):
         self.main = nn.Sequential(*layers)
 
     def forward(self, x):
-        # x is an image [B, 3, H, W]
-        logits = self.main(x) # [B, 1]
-        return logits.squeeze(1) # [B] for compatibility with BCEWithLogitsLoss if not using RaLSGAN
+        logits = self.main(x)
+        return logits.squeeze(1)
+
+
+# --- Models for gan6 architecture (Graph Encoder + CNN Generator) ---
+# These models (GraphEncoderGAT, GeneratorCNN, DiscriminatorCNN)
+# already seem to use config.model correctly based on prior analysis.
+# No changes needed for them in this step.
+# The duplicate Generator class below this comment block will be removed.
 
 # Need to correct Generator forward signature to include adj_matrix
 # Original gan5.py Generator: def forward(self, z, images, segments, A):
@@ -308,69 +260,70 @@ class Discriminator(nn.Module):
 # It's missing A (adj_matrix). I need to add it.
 
 # Re-defining Generator with corrected forward signature
-class Generator(nn.Module): # type: ignore
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.num_superpixels = config.num_superpixels
+# THIS DUPLICATE CLASS WILL BE REMOVED.
+# class Generator(nn.Module): # type: ignore
+#     def __init__(self, config):
+#         super().__init__()
+#         self.config = config
+#         self.num_superpixels = config.num_superpixels
 
-        self.proj_input = WSConv2d(3 + config.z_dim, config.g_channels, kernel_size=1, padding=0,
-                                   use_spectral_norm=config.g_spectral_norm)
+#         self.proj_input = WSConv2d(3 + config.z_dim, config.g_channels, kernel_size=1, padding=0,
+#                                    use_spectral_norm=config.g_spectral_norm)
 
-        self.gcn_blocks = nn.ModuleList()
-        for _ in range(config.g_num_gcn_blocks):
-            self.gcn_blocks.append(
-                GCNBlock(
-                    dim=config.g_channels,
-                    dropout_rate=config.g_dropout_rate,
-                    use_ada_in=config.g_ada_in,
-                    use_spectral_norm_conv=config.g_spectral_norm
-                )
-            )
+#         self.gcn_blocks = nn.ModuleList()
+#         for _ in range(config.g_num_gcn_blocks):
+#             self.gcn_blocks.append(
+#                 GCNBlock(
+#                     dim=config.g_channels,
+#                     dropout_rate=config.g_dropout_rate,
+#                     use_ada_in=config.g_ada_in,
+#                     use_spectral_norm_conv=config.g_spectral_norm
+#                 )
+#             )
 
-        self.decoder = nn.Sequential(
-            WSConv2d(config.g_channels, config.g_channels // 2, kernel_size=3, padding=1, use_spectral_norm=config.g_spectral_norm),
-            nn.LeakyReLU(0.2, inplace=True),
-            WSConv2d(config.g_channels // 2, 3, kernel_size=3, padding=1, use_spectral_norm=config.g_spectral_norm)
-        )
+#         self.decoder = nn.Sequential(
+#             WSConv2d(config.g_channels, config.g_channels // 2, kernel_size=3, padding=1, use_spectral_norm=config.g_spectral_norm),
+#             nn.LeakyReLU(0.2, inplace=True),
+#             WSConv2d(config.g_channels // 2, 3, kernel_size=3, padding=1, use_spectral_norm=config.g_spectral_norm)
+#         )
 
-        if config.g_final_norm == 'instancenorm':
-            self.final_norm = nn.InstanceNorm2d(3, affine=False)
-        else:
-            self.final_norm = None
+#         if config.g_final_norm == 'instancenorm':
+#             self.final_norm = nn.InstanceNorm2d(3, affine=False)
+#         else:
+#             self.final_norm = None
 
-    def forward(self, z, real_images, segments_map, adj_matrix): # Added adj_matrix
-        B, _, H, W = real_images.shape
-        N = H * W
-        S = self.num_superpixels
+#     def forward(self, z, real_images, segments_map, adj_matrix): # Added adj_matrix
+#         B, _, H, W = real_images.shape
+#         N = H * W
+#         S = self.num_superpixels
 
-        flat_real_images = real_images.view(B, 3, N)
-        flat_segments = segments_map.view(B, N)
-        one_hot_segments = F.one_hot(flat_segments, num_classes=S).float()
+#         flat_real_images = real_images.view(B, 3, N)
+#         flat_segments = segments_map.view(B, N)
+#         one_hot_segments = F.one_hot(flat_segments, num_classes=S).float()
 
-        sum_feats = torch.bmm(one_hot_segments.transpose(1, 2), flat_real_images.transpose(1, 2))
-        counts = one_hot_segments.sum(dim=1).unsqueeze(-1).clamp(min=1e-6)
-        mean_color_feats = sum_feats / counts
+#         sum_feats = torch.bmm(one_hot_segments.transpose(1, 2), flat_real_images.transpose(1, 2))
+#         counts = one_hot_segments.sum(dim=1).unsqueeze(-1).clamp(min=1e-6)
+#         mean_color_feats = sum_feats / counts
 
-        z_replicated = z.view(B, 1, self.config.z_dim).expand(-1, S, -1)
-        combined_superpixel_feats = torch.cat([mean_color_feats, z_replicated], dim=2)
-        x = combined_superpixel_feats.permute(0, 2, 1).unsqueeze(-1)
+#         z_replicated = z.view(B, 1, self.config.z_dim).expand(-1, S, -1)
+#         combined_superpixel_feats = torch.cat([mean_color_feats, z_replicated], dim=2)
+#         x = combined_superpixel_feats.permute(0, 2, 1).unsqueeze(-1)
 
-        x = self.proj_input(x)
+#         x = self.proj_input(x)
 
-        for block in self.gcn_blocks:
-            x = block(x, adj_matrix) # Pass adj_matrix to GCNBlock
+#         for block in self.gcn_blocks:
+#             x = block(x, adj_matrix) # Pass adj_matrix to GCNBlock
 
-        processed_superpixel_feats = x.squeeze(-1).permute(0, 2, 1)
-        pixel_level_feats = torch.bmm(one_hot_segments, processed_superpixel_feats)
-        pixel_level_feats = pixel_level_feats.permute(0, 2, 1).view(B, self.config.g_channels, H, W)
+#         processed_superpixel_feats = x.squeeze(-1).permute(0, 2, 1)
+#         pixel_level_feats = torch.bmm(one_hot_segments, processed_superpixel_feats)
+#         pixel_level_feats = pixel_level_feats.permute(0, 2, 1).view(B, self.config.g_channels, H, W)
 
-        output_image = self.decoder(pixel_level_feats)
+#         output_image = self.decoder(pixel_level_feats)
 
-        if self.final_norm:
-            output_image = self.final_norm(output_image)
+#         if self.final_norm:
+#             output_image = self.final_norm(output_image)
 
-        return torch.tanh(output_image)
+#         return torch.tanh(output_image)
 
 
 # --- Models for gan6 architecture (Graph Encoder + CNN Generator) ---
