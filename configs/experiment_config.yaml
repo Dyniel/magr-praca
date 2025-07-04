@@ -1,4 +1,4 @@
-# Example experiment_config.yaml
+# Example experiment_config.yaml for gan5_gcn architecture
 # This file can be used to override defaults from BaseConfig.
 
 # --- System and Paths ---
@@ -10,28 +10,31 @@ run_name: "gan5_refactored_lr_1e-5_bs_8"
 
 # --- Data and Preprocessing ---
 image_size: 256
-num_superpixels: 200 # Changed from default 150
-slic_compactness: 15.0 # Changed from default 10.0
+num_superpixels: 200 # This is the global one, used by gan5 SuperpixelDataset
+slic_compactness: 15.0 # This is the global one, used by gan5 SuperpixelDataset
 # debug_num_images: 16 # For a quick test run
 
-# --- Model Hyperparameters ---
-z_dim: 256
+# --- Model Configuration ---
+model:
+  architecture: "gan5_gcn" # Explicitly stating, though it's the default in BaseConfig
 
-# Generator (G)
-g_channels: 128
-g_num_gcn_blocks: 8
-g_dropout_rate: 0.25 # Slightly increased
-g_ada_in: False
-g_spectral_norm: True
-g_final_norm: "instancenorm"
+  # Shared z_dim (used by gan5 G)
+  z_dim: 256
 
-# Discriminator (D)
-d_channels: 64
-d_spectral_norm: True
+  # Parameters for gan5_gcn architecture
+  g_channels: 128
+  g_num_gcn_blocks: 8
+  g_dropout_rate: 0.25 # Slightly increased from default
+  g_ada_in: False
+  g_spectral_norm: True
+  g_final_norm: "instancenorm"
+
+  d_channels: 64
+  d_spectral_norm: True
 
 # --- Training Hyperparameters ---
-batch_size: 8 # Reduced batch size
-num_epochs: 250 # Increased epochs
+batch_size: 8 # Reduced batch size from BaseConfig default
+num_epochs: 250 # Increased epochs from BaseConfig default
 g_lr: 1e-5 # Lower generator learning rate
 d_lr: 1e-4 # Lower discriminator learning rate
 beta1: 0.0
@@ -48,23 +51,10 @@ sample_freq_epoch: 1
 num_samples_to_log: 8
 checkpoint_freq_epoch: 5
 
-# To use this, the training script would do something like:
-# from omegaconf import OmegaConf
-# from configs.base_config import BaseConfig
-#
-# # Start with structured base config
-# conf = OmegaConf.structured(BaseConfig)
-#
-# # Load YAML config file
-# yaml_conf = OmegaConf.load("configs/experiment_config.yaml") # Or path from CLI arg
-#
-# # Merge - YAML overrides base
-# conf = OmegaConf.merge(conf, yaml_conf)
-#
-# # Optionally, merge command-line arguments
-# # cli_conf = OmegaConf.from_cli()
-# # conf = OmegaConf.merge(conf, cli_conf)
-#
-# # Now 'conf' object has the final configuration
-# print(conf)
-print("configs/experiment_config.yaml example created.")
+enable_fid_calculation: True
+fid_num_images: 5000
+fid_batch_size: 32
+fid_freq_epoch: 10 # Calculate FID less frequently
+
+# --- Resume Training ---
+# resume_checkpoint_path: null # or path/to/checkpoint.pth.tar

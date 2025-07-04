@@ -1,3 +1,4 @@
+from typing import Optional
 from dataclasses import dataclass, field
 import os
 
@@ -59,34 +60,43 @@ class BaseConfig:
     enable_fid_calculation: bool = True # Default to True, can be disabled in YAML.
 
     # --- Resume Training ---
-    resume_checkpoint_path: str = None # Path to a .pth.tar checkpoint file to resume training
+    resume_checkpoint_path: Optional[str] = None # Path to a .pth.tar checkpoint file to resume training
 
     # --- Output Directory Management ---
     # This will be the actual directory for this specific run's outputs
     output_dir_run: str = field(init=False)
 
-
     def __post_init__(self):
         # Set dynamic paths and dependent configs
-        if not self.wandb_project_name: # if not overridden by OmegaConf
+
+        # Initialize init=False fields if they haven't been set (e.g., by OmegaConf merge)
+        if not hasattr(self, 'wandb_project_name') or getattr(self, 'wandb_project_name', None) is None:
             self.wandb_project_name = self.project_name
-        if not self.wandb_run_name:
+        if not hasattr(self, 'wandb_run_name') or getattr(self, 'wandb_run_name', None) is None:
             self.wandb_run_name = self.run_name
 
         # Construct the full output directory for this run
         self.output_dir_run = os.path.join(self.output_dir_base, self.project_name, self.run_name)
 
-        # The SuperpixelDataset cache_dir is constructed within the dataset itself
-        # based on num_superpixels and image_size to allow multiple caches.
-        # self.cache_dir = os.path.join(self.cache_dir_base, f"sp_{self.num_superpixels}_is_{self.image_size}")
-
-        # Ensure model defaults are populated if model was overridden by a dict from YAML
+        # Ensure model defaults are populated correctly after potential merges
         if not isinstance(self.model, ModelConfig):
-            # If self.model is a dict (e.g. from OmegaConf.merge with a YAML dict for model)
-            # then we need to create a ModelConfig object from it to ensure defaults for missing fields.
-            # This assumes ModelConfig can be initialized from a dict.
-            model_dict = self.model if isinstance(self.model, dict) else vars(self.model) # vars for OmegaConf DotList
-            self.model = ModelConfig(**model_dict)
+            current_model_config_dict = {}
+            if self.model is not None:
+                from omegaconf import OmegaConf  # Local import for this check
+                if OmegaConf.is_config(self.model):
+                    current_model_config_dict = OmegaConf.to_container(self.model, resolve=True)
+                elif isinstance(self.model, dict):
+                    current_model_config_dict = self.model
+
+            # Create a new ModelConfig with its own defaults
+            default_model_conf = ModelConfig()
+            # Update its fields with any values that were present in the merged config for the model section
+            for key, value in current_model_config_dict.items():
+                if hasattr(default_model_conf, key):
+                    setattr(default_model_conf, key, value)
+            self.model = default_model_conf
+        elif self.model is None:  # Should be caught by default_factory, but defensive
+            self.model = ModelConfig()
 
 
 @dataclass
