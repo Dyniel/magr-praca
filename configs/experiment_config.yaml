@@ -12,7 +12,7 @@ run_name: "gan5_refactored_lr_1e-5_bs_8"
 image_size: 256
 num_superpixels: 200 # This is the global one, used by gan5 SuperpixelDataset
 slic_compactness: 15.0 # This is the global one, used by gan5 SuperpixelDataset
-# debug_num_images: 16 # For a quick test run
+debug_num_images: 0 # Set to 0 to use all images for a proper experiment
 
 # --- Model Configuration ---
 model:
