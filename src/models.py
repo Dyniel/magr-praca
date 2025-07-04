@@ -174,7 +174,7 @@ class Generator(nn.Module): # Was nn.Module
         z_replicated = z.view(B, 1, self.config.z_dim).expand(-1, S, -1)
 
         # Combined features: [B, S, 3 + z_dim]
-        z_replicated = z.view(B, 1, self.config_model.z_dim).expand(-1, S, -1) # Use config_model
+        z_replicated = z.view(B, 1, self.config_model.z_dim).expand(-1, S, -1) # Changed self.config to self.config_model
         combined_superpixel_feats = torch.cat([mean_color_feats, z_replicated], dim=2)
 
         # Reshape for convolutional GCN blocks: [B, 3 + z_dim, S, 1]
