@@ -171,10 +171,10 @@ class Generator(nn.Module): # Was nn.Module
 
         # 2. Concatenate with latent vector z
         # Replicate z for each superpixel: [B, S, z_dim]
-        z_replicated = z.view(B, 1, self.config.z_dim).expand(-1, S, -1)
+        # Removed redundant incorrect line: z_replicated = z.view(B, 1, self.config.z_dim).expand(-1, S, -1)
 
         # Combined features: [B, S, 3 + z_dim]
-        z_replicated = z.view(B, 1, self.config_model.z_dim).expand(-1, S, -1) # Changed self.config to self.config_model
+        z_replicated = z.view(B, 1, self.config_model.z_dim).expand(-1, S, -1) # Corrected: Ensuring this uses config_model
         combined_superpixel_feats = torch.cat([mean_color_feats, z_replicated], dim=2)
 
         # Reshape for convolutional GCN blocks: [B, 3 + z_dim, S, 1]
