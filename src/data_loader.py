@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from torchvision import transforms # Will be used for basic transforms if not passed custom ones
+from tqdm import tqdm # Added import
 
 from src.utils import (
     precompute_superpixels_for_dataset, get_image_paths,

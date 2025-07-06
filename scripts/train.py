@@ -16,9 +16,17 @@ from src.models import (
 )
 from src.data_loader import get_dataloader
 from src.utils import (
+    PYG_AVAILABLE, # Import to check if PyG is available
     save_checkpoint, load_checkpoint, setup_wandb, log_to_wandb,
     denormalize_image
 )
+
+if PYG_AVAILABLE:
+    from torch_geometric.data import Batch as PyGBatch
+    from torch_geometric.data import Data as PyGData
+else:
+    PyGBatch = None
+    PyGData = None
 
 try:
     from pytorch_fid.fid_score import calculate_fid_given_paths
@@ -132,12 +140,28 @@ class Trainer:
                 }
             elif self.model_architecture == "gan6_gat_cnn":
                 if not (isinstance(raw_fixed_batch, tuple) and len(raw_fixed_batch) == 2):
-                    print(f"Warning: Fixed sample batch for gan6_gat_cnn not in expected tuple format.")
+                    print(f"Warning: Fixed sample batch for gan6_gat_cnn not in expected tuple format. Type: {type(raw_fixed_batch)}")
                     return None
                 real_images_tensor, graph_batch_pyg = raw_fixed_batch
+
+                if PyGBatch is None: # Should have been caught by model init, but defensive check
+                    print("Error: PyGBatch not available for preparing fixed sample batch.")
+                    return None
+
+                # Correctly slice the PyGBatch object
+                num_graphs_in_batch = graph_batch_pyg.num_graphs if hasattr(graph_batch_pyg, 'num_graphs') else 0
+                actual_num_samples = min(num_samples, num_graphs_in_batch)
+
+                if actual_num_samples == 0:
+                    print("Warning: No graphs to sample in fixed batch.")
+                    return None
+
+                data_list = graph_batch_pyg.to_data_list()
+                sliced_graph_batch = PyGBatch.from_data_list(data_list[:actual_num_samples])
+
                 return {
-                    "image": real_images_tensor[:num_samples].to(self.device),
-                    "graph_batch": graph_batch_pyg[:num_samples].to(self.device)
+                    "image": real_images_tensor[:actual_num_samples].to(self.device),
+                    "graph_batch": sliced_graph_batch.to(self.device)
                 }
             return None
         except StopIteration:
@@ -549,10 +573,24 @@ class Trainer:
                 if current_gen_count <= 0: continue
 
                 with torch.no_grad():
-                    # Slice the graph batch if current_gen_count is less than the number of graphs in batch
-                    sliced_graph_batch = graph_batch_pyg_fid[:current_gen_count]
-                    z_graph = self.E(sliced_graph_batch)
-                    fake_images_batch = self.G(z_graph, current_gen_count)
+                    if PyGBatch is None:
+                        print("Error: PyGBatch not available for FID calculation.")
+                        continue
+
+                    # Correctly slice the PyGBatch object for FID
+                    data_list_fid = graph_batch_pyg_fid.to_data_list()
+                    if current_gen_count > len(data_list_fid): # Should not happen if current_gen_count is derived from num_graphs
+                        print(f"Warning: current_gen_count ({current_gen_count}) > available graphs ({len(data_list_fid)}) in FID batch.")
+                        current_gen_count = len(data_list_fid)
+
+                    if current_gen_count == 0:
+                        continue
+
+                    sliced_graph_list = data_list_fid[:current_gen_count]
+                    sliced_graph_batch = PyGBatch.from_data_list(sliced_graph_list)
+
+                    z_graph = self.E(sliced_graph_batch) # Pass the correctly sliced PyGBatch
+                    fake_images_batch = self.G(z_graph, current_gen_count) # current_gen_count should match num_graphs in sliced_graph_batch
 
             if fake_images_batch is None: continue
             self._save_images_for_fid(fake_images_batch, self.fid_temp_fake_path, generated_count,
