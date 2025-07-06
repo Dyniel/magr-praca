@@ -140,6 +140,21 @@ class Trainer:
                 }
             elif self.model_architecture == "gan6_gat_cnn":
                 if not (isinstance(raw_fixed_batch, tuple) and len(raw_fixed_batch) == 2):
+                    print(f"----------- DEBUG: Fixed sample batch for gan6_gat_cnn not in expected tuple format. -----------")
+                    print(f"Type of raw_fixed_batch: {type(raw_fixed_batch)}")
+                    if isinstance(raw_fixed_batch, (list, tuple)):
+                        print(f"Length of raw_fixed_batch: {len(raw_fixed_batch)}")
+                        for i, item in enumerate(raw_fixed_batch):
+                            print(f"Type of item {i} in raw_fixed_batch: {type(item)}")
+                            if hasattr(item, 'shape'):
+                                print(f"Shape of item {i}: {item.shape}")
+                            if hasattr(item, 'num_graphs'):
+                                print(f"Num_graphs in item {i}: {item.num_graphs}")
+                    elif hasattr(raw_fixed_batch, 'num_graphs'):
+                         print(f"raw_fixed_batch appears to be a PyGBatch object with num_graphs: {raw_fixed_batch.num_graphs}")
+                    print(f"--------------------------------------------------------------------------------------------------")
+                    # Original warning and return None:
+
                     print(f"Warning: Fixed sample batch for gan6_gat_cnn not in expected tuple format. Type: {type(raw_fixed_batch)}")
                     return None
                 real_images_tensor, graph_batch_pyg = raw_fixed_batch
@@ -308,6 +323,20 @@ class Trainer:
 
             elif self.model_architecture == "gan6_gat_cnn":
                 if not (isinstance(raw_batch_data, tuple) and len(raw_batch_data) == 2):
+                    print(f"----------- DEBUG: Invalid batch data for gan6_gat_cnn -----------")
+                    print(f"Type of raw_batch_data: {type(raw_batch_data)}")
+                    if isinstance(raw_batch_data, (list, tuple)):
+                        print(f"Length of raw_batch_data: {len(raw_batch_data)}")
+                        for i, item in enumerate(raw_batch_data):
+                            print(f"Type of item {i} in raw_batch_data: {type(item)}")
+                            if hasattr(item, 'shape'):
+                                print(f"Shape of item {i}: {item.shape}")
+                            if hasattr(item, 'num_graphs'): # For PyGBatch objects
+                                print(f"Num_graphs in item {i}: {item.num_graphs}")
+                    elif hasattr(raw_batch_data, 'num_graphs'): # If raw_batch_data itself is a PyGBatch
+                        print(f"raw_batch_data appears to be a PyGBatch object with num_graphs: {raw_batch_data.num_graphs}")
+                    print(f"--------------------------------------------------------------------")
+                    # The original warning and continue:
                     print(f"Warning: Invalid batch data for gan6_gat_cnn: {type(raw_batch_data)}")
                     continue
                 real_images, graph_batch_pyg = raw_batch_data
