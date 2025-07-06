@@ -16,21 +16,27 @@ debug_num_images: 0 # Set to 0 to use all images for a proper experiment
 
 # --- Model Configuration ---
 model:
-  architecture: "gan5_gcn" # Explicitly stating, though it's the default in BaseConfig
+  architecture: "gan6_gat_cnn" # Switched to gan6 architecture
 
-  # Shared z_dim (used by gan5 G)
-  z_dim: 256
+  # Shared z_dim (used by gan5 G, less directly by gan6 G which uses specific z_dims below)
+  z_dim: 256 # This will be available in config.model.z_dim
 
-  # Parameters for gan5_gcn architecture
-  g_channels: 128
-  g_num_gcn_blocks: 8
-  g_dropout_rate: 0.25 # Slightly increased from default
-  g_ada_in: False
-  g_spectral_norm: True
-  g_final_norm: "instancenorm"
+  # Parameters for gan5_gcn architecture (will be ignored due to architecture switch)
+  # g_channels: 128
+  # g_num_gcn_blocks: 8
+  # g_dropout_rate: 0.25
+  # g_ada_in: False
+  # g_spectral_norm: True
+  # g_final_norm: "instancenorm"
+  # d_channels: 64
+  # d_spectral_norm: True
 
-  d_channels: 64
-  d_spectral_norm: True
+  # Parameters for gan6_gat_cnn architecture will primarily come from BaseConfig defaults
+  # unless overridden here. For example:
+  # gat_dim: 128 # Default from BaseConfig.ModelConfig
+  # gan6_z_dim_graph_encoder_output: 128 # Default
+  # gan6_z_dim_noise: 128 # Default
+  # gan6_num_superpixels: 200 # Default, matches top-level num_superpixels
 
 # --- Training Hyperparameters ---
 batch_size: 8 # Reduced batch size from BaseConfig default
