@@ -154,6 +154,7 @@ class Trainer:
                          print(f"raw_fixed_batch appears to be a PyGBatch object with num_graphs: {raw_fixed_batch.num_graphs}")
                     print(f"--------------------------------------------------------------------------------------------------")
                     # Original warning and return None:
+
                     print(f"Warning: Fixed sample batch for gan6_gat_cnn not in expected tuple format. Type: {type(raw_fixed_batch)}")
                     return None
                 real_images_tensor, graph_batch_pyg = raw_fixed_batch
