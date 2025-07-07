@@ -151,11 +151,40 @@ class Trainer:
                     graph_batch_pyg = PyGBatch.from_data_list(graph_batch_pyg)
 
                 # Now, it should be safe to slice and send to device
-                sliced_graph_batch = graph_batch_pyg[:num_samples]
+                # Correct way to slice a PyGBatch: convert to list, slice, then re-batch
+                final_graph_batch_for_device = None
+                if graph_batch_pyg is not None and graph_batch_pyg.num_graphs > 0:
+                    num_graphs_to_take = min(num_samples, graph_batch_pyg.num_graphs)
+                    if num_graphs_to_take > 0:
+                        graph_data_list = graph_batch_pyg.to_data_list()
+                        sliced_graph_list = graph_data_list[:num_graphs_to_take]
+                        if sliced_graph_list:  # Ensure the list is not empty
+                            final_graph_batch_for_device = PyGBatch.from_data_list(sliced_graph_list).to(self.device)
+                        else:  # Should not happen if num_graphs_to_take > 0
+                            print(
+                                f"Warning (_prepare_fixed_sample_batch): Sliced graph list is empty even though num_graphs_to_take was {num_graphs_to_take}.")
+                    else:  # num_samples might be 0 or less
+                        print(
+                            f"Warning (_prepare_fixed_sample_batch): num_samples is {num_samples}, cannot take graphs.")
+                else:
+                    print(f"Warning (_prepare_fixed_sample_batch): Initial graph_batch_pyg is None or empty.")
+
+                if final_graph_batch_for_device is None:
+                    # Fallback or error: if no valid graph batch could be prepared
+                    print(
+                        f"Error (_prepare_fixed_sample_batch): Could not prepare a valid graph batch for fixed samples.")
+                    # Return None or raise an error, or return a batch with None for graph_batch
+                    # For now, let's allow returning with None graph_batch to match previous behavior if slicing failed.
+                    # This will cause "Fixed sample batch not available" later, which is an existing behavior.
+                    # A more robust solution might be to ensure dataloader always provides enough valid data.
+                    return {
+                        "image": real_images_tensor[:num_samples].to(self.device),
+                        "graph_batch": None  # Explicitly None
+                    }
 
                 return {
                     "image": real_images_tensor[:num_samples].to(self.device),  # Real images for D
-                    "graph_batch": sliced_graph_batch.to(self.device)  # Graph data for E
+                    "graph_batch": final_graph_batch_for_device  # Graph data for E
                 }
             return None
         except Exception as e:
@@ -715,19 +744,51 @@ class Trainer:
                         # Collate into a Batch object first
                         graph_batch_pyg_cond = PyGBatch.from_data_list(graph_batch_pyg_cond)
 
-                    graph_batch_pyg_cond = graph_batch_pyg_cond.to(self.device)
+                    graph_batch_pyg_cond = graph_batch_pyg_cond.to(self.device)  # Send original batch to device first
 
-                    # Slicing a PyGBatch object returns another PyGBatch object
-                    sliced_graph_batch_cond = graph_batch_pyg_cond[:num_to_generate_this_iter]
+                    # Correct way to take a subset of graphs from a PyGBatch for FID generation
+                    sliced_graph_batch_for_e = None
+                    if graph_batch_pyg_cond is not None and graph_batch_pyg_cond.num_graphs > 0:
+                        num_graphs_to_process = min(num_to_generate_this_iter, graph_batch_pyg_cond.num_graphs)
 
-                    # Ensure sliced_graph_batch_cond is not empty and is valid before passing to E
-                    if not isinstance(sliced_graph_batch_cond, PyGBatch) or sliced_graph_batch_cond.num_graphs == 0:
+                        if num_graphs_to_process > 0:
+                            data_list_cond = graph_batch_pyg_cond.to_data_list()
+                            sliced_data_list_cond = data_list_cond[:num_graphs_to_process]
+
+                            if sliced_data_list_cond:  # Ensure the list is not empty
+                                sliced_graph_batch_for_e = PyGBatch.from_data_list(sliced_data_list_cond)
+                                # Ensure it's on the correct device (it should be if graph_batch_pyg_cond was)
+                                # but PyGBatch.from_data_list might create it on CPU by default from list of CPU data.
+                                # Since graph_batch_pyg_cond was already moved to device, its data_list items are on device.
+                                # So from_data_list should keep them on device. If not, uncomment:
+                                # sliced_graph_batch_for_e = sliced_graph_batch_for_e.to(self.device)
+                            else:
+                                print(
+                                    f"Warning (calculate_fid_score): Sliced data list for FID is empty. Num graphs to process: {num_graphs_to_process}")
+                        else:
+                            print(
+                                f"Warning (calculate_fid_score): num_to_generate_this_iter is {num_to_generate_this_iter} or graph batch too small, cannot process graphs for FID.")
+                    else:
+                        print(f"Warning (calculate_fid_score): graph_batch_pyg_cond for FID is None or empty.")
+
+                    # Ensure sliced_graph_batch_for_e is not empty and is valid before passing to E
+                    if sliced_graph_batch_for_e is None or not isinstance(sliced_graph_batch_for_e,
+                                                                          PyGBatch) or sliced_graph_batch_for_e.num_graphs == 0:
+                        warning_num_graphs_msg = 'None'
+                        if sliced_graph_batch_for_e is not None and hasattr(sliced_graph_batch_for_e, 'num_graphs'):
+                            warning_num_graphs_msg = sliced_graph_batch_for_e.num_graphs
+                        elif sliced_graph_batch_for_e is not None:
+                            warning_num_graphs_msg = 'Not a PyGBatch object'
+
                         print(
-                            f"Warning: Sliced graph batch for FID is invalid or empty (num_graphs: {sliced_graph_batch_cond.num_graphs if isinstance(sliced_graph_batch_cond, PyGBatch) else 'Not a PyGBatch'}). Skipping this iteration for FID.")
+                            f"Warning: Sliced graph batch for FID is invalid or empty (num_graphs: {warning_num_graphs_msg}). Skipping this iteration for FID.")
                         # fake_images_batch will remain None, handled below
                     else:
-                        z_graph = self.E(sliced_graph_batch_cond)
-                        fake_images_batch = self.G(z_graph, num_to_generate_this_iter)
+                        # Ensure it's on the correct device if not already
+                        sliced_graph_batch_for_e = sliced_graph_batch_for_e.to(self.device)
+                        z_graph = self.E(sliced_graph_batch_for_e)
+                        # Use the actual number of graphs in the batch for G's batch_size argument
+                        fake_images_batch = self.G(z_graph, sliced_graph_batch_for_e.num_graphs)
 
             if fake_images_batch is not None:
                 for i in range(fake_images_batch.size(0)):
