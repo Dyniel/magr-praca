@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from src.utils import spectral_norm # Assuming spectral_norm is in utils
+from src.utils import spectral_norm  # Assuming spectral_norm is in utils
+
 
 # Reusable building blocks, adapted from legacy/gan5.py
 # These will now accept config parameters indirectly via their parent model's config.
@@ -17,14 +18,19 @@ class WSConv2d(nn.Module):
         else:
             self.conv = conv_layer
 
-        # Weight scaling
-        self.scale = math.sqrt(2 / (in_ch * kernel_size * kernel_size))
-        nn.init.normal_(self.conv.weight, 0, 1) # Scaled by self.scale in forward
+        # Kaiming He initialization for LeakyReLU
+        negative_slope = 0.2  # Assuming LeakyReLU with this slope is used after this conv
+        gain = math.sqrt(2.0 / (1 + negative_slope ** 2))
+        fan_in = in_ch * kernel_size * kernel_size
+        std = gain / math.sqrt(fan_in)
+        nn.init.normal_(self.conv.weight, mean=0.0, std=std)
+
         if self.conv.bias is not None:
             nn.init.zeros_(self.conv.bias)
 
     def forward(self, x):
-        return self.conv(x * self.scale)
+        return self.conv(x)
+
 
 class AdaIN(nn.Module):
     def __init__(self, style_dim, content_dim, use_spectral_norm=True):
@@ -43,7 +49,8 @@ class AdaIN(nn.Module):
         self.mlp = nn.Sequential(
             WSConv2d(content_dim, content_dim * 2, kernel_size=1, padding=0, use_spectral_norm=use_spectral_norm),
             nn.LeakyReLU(0.2, inplace=True),
-            WSConv2d(content_dim * 2, content_dim * 2, kernel_size=1, padding=0, use_spectral_norm=use_spectral_norm) # Output: gamma and beta
+            WSConv2d(content_dim * 2, content_dim * 2, kernel_size=1, padding=0, use_spectral_norm=use_spectral_norm)
+            # Output: gamma and beta
         )
         # No instance norm layer explicitly here, as it's part of the AdaIN definition:
         # gamma * ( (x - mu) / sigma ) + beta
@@ -53,8 +60,8 @@ class AdaIN(nn.Module):
 
     def forward(self, content_features):
         # content_features: [B, C, S, 1] for GCNBlock
-        style_params = self.mlp(content_features.mean([2,3], keepdim=True)) # [B, C*2, 1, 1]
-        gamma, beta = style_params.chunk(2, 1) # Each [B, C, 1, 1]
+        style_params = self.mlp(content_features.mean([2, 3], keepdim=True))  # [B, C*2, 1, 1]
+        gamma, beta = style_params.chunk(2, 1)  # Each [B, C, 1, 1]
         return gamma * content_features + beta
 
 
@@ -64,7 +71,8 @@ class GCNBlock(nn.Module):
         self.proj = WSConv2d(dim, dim, kernel_size=1, padding=0, use_spectral_norm=use_spectral_norm_conv)
         self.use_ada_in = use_ada_in
         if self.use_ada_in:
-            self.ada = AdaIN(style_dim=dim, content_dim=dim, use_spectral_norm=use_spectral_norm_conv) # Matching gan5's implicit style/content dim
+            self.ada = AdaIN(style_dim=dim, content_dim=dim,
+                             use_spectral_norm=use_spectral_norm_conv)  # Matching gan5's implicit style/content dim
         else:
             self.ada = None
         self.dropout = nn.Dropout(dropout_rate)
@@ -75,16 +83,16 @@ class GCNBlock(nn.Module):
             x (Tensor): Node features [B, C, S, 1] (S = num_superpixels)
             A (Tensor): Adjacency matrix [B, S, S]
         """
-        B, C, S, _ = x.shape # S is num_superpixels
+        B, C, S, _ = x.shape  # S is num_superpixels
 
-        h = self.proj(x) # [B, C, S, 1]
+        h = self.proj(x)  # [B, C, S, 1]
 
         # Graph convolution: A * H * W (here, H is features, W is weights of GCN layer)
         # Simplified: A * H (features)
-        feat_for_gcn = h.squeeze(-1).permute(0, 2, 1) # [B, S, C]
-        feat_after_gcn = torch.einsum('bij,bjk->bik', A, feat_for_gcn) # [B, S, C]
+        feat_for_gcn = h.squeeze(-1).permute(0, 2, 1)  # [B, S, C]
+        feat_after_gcn = torch.einsum('bij,bjk->bik', A, feat_for_gcn)  # [B, S, C]
 
-        h = feat_after_gcn.permute(0, 2, 1).unsqueeze(-1) # [B, C, S, 1]
+        h = feat_after_gcn.permute(0, 2, 1).unsqueeze(-1)  # [B, C, S, 1]
 
         if self.ada:
             h = self.ada(h)
@@ -94,12 +102,12 @@ class GCNBlock(nn.Module):
         return h
 
 
-class Generator(nn.Module): # Was nn.Module
+class Generator(nn.Module):  # Was nn.Module
     # This is the Generator for 'gan5_gcn' architecture
     def __init__(self, config):
         super().__init__()
-        self.config_model = config.model # Store model-specific sub-config
-        self.num_superpixels = config.num_superpixels # Top-level config
+        self.config_model = config.model  # Store model-specific sub-config
+        self.num_superpixels = config.num_superpixels  # Top-level config
 
         # Input projection: (superpixel_color_features + z_dim) -> g_channels
         # Superpixel color features are 3 (RGB)
@@ -107,7 +115,7 @@ class Generator(nn.Module): # Was nn.Module
                                    use_spectral_norm=self.config_model.g_spectral_norm)
 
         self.gcn_blocks = nn.ModuleList()
-        for _ in range(self.config_model.g_num_gcn_blocks): # e.g., 8 blocks
+        for _ in range(self.config_model.g_num_gcn_blocks):  # e.g., 8 blocks
             self.gcn_blocks.append(
                 GCNBlock(
                     dim=self.config_model.g_channels,
@@ -119,23 +127,26 @@ class Generator(nn.Module): # Was nn.Module
 
         # Decoder / "Upsampler"
         self.decoder = nn.Sequential(
-            WSConv2d(self.config_model.g_channels, self.config_model.g_channels // 2, kernel_size=3, padding=1, use_spectral_norm=self.config_model.g_spectral_norm),
+            WSConv2d(self.config_model.g_channels, self.config_model.g_channels // 2, kernel_size=3, padding=1,
+                     use_spectral_norm=self.config_model.g_spectral_norm),
             nn.LeakyReLU(0.2, inplace=True),
-            WSConv2d(self.config_model.g_channels // 2, 3, kernel_size=3, padding=1, use_spectral_norm=self.config_model.g_spectral_norm)
+            WSConv2d(self.config_model.g_channels // 2, 3, kernel_size=3, padding=1,
+                     use_spectral_norm=self.config_model.g_spectral_norm)
         )
 
         if self.config_model.g_final_norm == 'instancenorm':
             self.final_norm = nn.InstanceNorm2d(3, affine=False)
         elif self.config_model.g_final_norm == 'layernorm':
-            self.final_norm = nn.InstanceNorm2d(3, affine=False) # Placeholder
-            print("Warning: LayerNorm for Generator final_norm requested but not fully implemented, using InstanceNorm.")
-        else: # 'none' or other
+            self.final_norm = nn.InstanceNorm2d(3, affine=False)  # Placeholder
+            print(
+                "Warning: LayerNorm for Generator final_norm requested but not fully implemented, using InstanceNorm.")
+        else:  # 'none' or other
             self.final_norm = None
 
     # The forward signature was corrected in the duplicate version.
     # The original definition here is missing adj_matrix.
     # I will use the signature from the (now removed) duplicate.
-    def forward(self, z, real_images, segments_map, adj_matrix): # Added adj_matrix
+    def forward(self, z, real_images, segments_map, adj_matrix):  # Added adj_matrix
         """
         Args:
             z (Tensor): Latent noise vector [B, z_dim].
@@ -148,12 +159,12 @@ class Generator(nn.Module): # Was nn.Module
                         The dataset should provide A.
         """
         B, _, H, W = real_images.shape
-        N = H * W # Total number of pixels
-        S = self.num_superpixels # Number of superpixels, from config
+        N = H * W  # Total number of pixels
+        S = self.num_superpixels  # Number of superpixels, from config
 
         # 1. Aggregate initial superpixel features (mean color) from real_images
-        flat_real_images = real_images.view(B, 3, N)         # [B, 3, N]
-        flat_segments = segments_map.view(B, N)              # [B, N]
+        flat_real_images = real_images.view(B, 3, N)  # [B, 3, N]
+        flat_segments = segments_map.view(B, N)  # [B, N]
 
         # Create one-hot encoding for segments: [B, N, S]
         # Ensure segments_map has labels from 0 to S-1
@@ -164,28 +175,29 @@ class Generator(nn.Module): # Was nn.Module
         sum_feats = torch.bmm(one_hot_segments.transpose(1, 2), flat_real_images.transpose(1, 2))
 
         # Counting pixels per superpixel
-        counts = one_hot_segments.sum(dim=1).unsqueeze(-1)   # [B, S, 1]
-        counts = counts.clamp(min=1e-6) # Avoid division by zero for empty superpixels
+        counts = one_hot_segments.sum(dim=1).unsqueeze(-1)  # [B, S, 1]
+        counts = counts.clamp(min=1e-6)  # Avoid division by zero for empty superpixels
 
-        mean_color_feats = sum_feats / counts                # [B, S, 3]
+        mean_color_feats = sum_feats / counts  # [B, S, 3]
 
         # 2. Concatenate with latent vector z
         # Replicate z for each superpixel: [B, S, z_dim]
         # Removed redundant incorrect line: z_replicated = z.view(B, 1, self.config.z_dim).expand(-1, S, -1)
 
         # Combined features: [B, S, 3 + z_dim]
-        z_replicated = z.view(B, 1, self.config_model.z_dim).expand(-1, S, -1) # Corrected: Ensuring this uses config_model
+        z_replicated = z.view(B, 1, self.config_model.z_dim).expand(-1, S,
+                                                                    -1)  # Corrected: Ensuring this uses config_model
         combined_superpixel_feats = torch.cat([mean_color_feats, z_replicated], dim=2)
 
         # Reshape for convolutional GCN blocks: [B, 3 + z_dim, S, 1]
         x = combined_superpixel_feats.permute(0, 2, 1).unsqueeze(-1)
 
         # 3. Initial projection
-        x = self.proj_input(x) # [B, g_channels, S, 1]
+        x = self.proj_input(x)  # [B, g_channels, S, 1]
 
         # 4. Pass through GCN blocks
         for block in self.gcn_blocks:
-            x = block(x, adj_matrix) # adj_matrix is passed in from forward's arguments
+            x = block(x, adj_matrix)  # adj_matrix is passed in from forward's arguments
 
         # x is now [B, g_channels, S, 1]
 
@@ -197,38 +209,42 @@ class Generator(nn.Module): # Was nn.Module
         pixel_level_feats = torch.bmm(one_hot_segments, processed_superpixel_feats)
 
         # Reshape to image-like tensor: [B, g_channels, H, W]
-        pixel_level_feats = pixel_level_feats.permute(0, 2, 1).view(B, self.config_model.g_channels, H, W) # Use config_model
+        pixel_level_feats = pixel_level_feats.permute(0, 2, 1).view(B, self.config_model.g_channels, H,
+                                                                    W)  # Use config_model
 
         # 6. Light decoder
-        output_image = self.decoder(pixel_level_feats) # [B, 3, H, W]
+        output_image = self.decoder(pixel_level_feats)  # [B, 3, H, W]
 
         # 7. Final normalization
         if self.final_norm:
             output_image = self.final_norm(output_image)
 
-        return torch.tanh(output_image) # Output in [-1, 1] range
+        return torch.tanh(output_image)  # Output in [-1, 1] range
 
 
-class Discriminator(nn.Module): # For 'gan5_gcn' architecture
+class Discriminator(nn.Module):  # For 'gan5_gcn' architecture
     def __init__(self, config):
         super().__init__()
-        self.config_model = config.model # Store model-specific sub-config
-        d_channels = self.config_model.d_channels # Base number of channels for D
+        self.config_model = config.model  # Store model-specific sub-config
+        d_channels = self.config_model.d_channels  # Base number of channels for D
 
         layers = []
         # Initial conv: 3 -> d_channels
-        layers.append(WSConv2d(3, d_channels, kernel_size=3, stride=1, padding=1, use_spectral_norm=self.config_model.d_spectral_norm))
+        layers.append(WSConv2d(3, d_channels, kernel_size=3, stride=1, padding=1,
+                               use_spectral_norm=self.config_model.d_spectral_norm))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
 
         current_channels = d_channels
 
         # Layer 1 (d -> d*2, H/2)
-        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1, use_spectral_norm=self.config_model.d_spectral_norm))
+        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1,
+                               use_spectral_norm=self.config_model.d_spectral_norm))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
         current_channels *= 2
 
         # Layer 2 (d*2 -> d*4, H/4)
-        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1, use_spectral_norm=self.config_model.d_spectral_norm))
+        layers.append(WSConv2d(current_channels, current_channels * 2, kernel_size=3, stride=2, padding=1,
+                               use_spectral_norm=self.config_model.d_spectral_norm))
         layers.append(nn.LeakyReLU(0.2, inplace=True))
         current_channels *= 2
 
@@ -236,7 +252,7 @@ class Discriminator(nn.Module): # For 'gan5_gcn' architecture
         layers.append(nn.Flatten())
 
         final_linear_layer = nn.Linear(current_channels, 1)
-        if self.config_model.d_spectral_norm: # d_spectral_norm also applies to linear layer in gan5
+        if self.config_model.d_spectral_norm:  # d_spectral_norm also applies to linear layer in gan5
             layers.append(spectral_norm(final_linear_layer))
         else:
             layers.append(final_linear_layer)
@@ -327,15 +343,19 @@ class Discriminator(nn.Module): # For 'gan5_gcn' architecture
 
 
 # --- Models for gan6 architecture (Graph Encoder + CNN Generator) ---
-from src.utils import PYG_AVAILABLE # To check if PyG is installed
+from src.utils import PYG_AVAILABLE  # To check if PyG is installed
 
 if PYG_AVAILABLE:
     from torch_geometric.nn import GATv2Conv, global_mean_pool
 else:
     # Placeholders if PyG is not installed, so the file can be imported.
     # Actual model instantiation will fail in Trainer if PYG_AVAILABLE is False and gan6 is selected.
-    class GATv2Conv: pass
-    def global_mean_pool(x, batch): return x
+    class GATv2Conv:
+        pass
+
+
+    def global_mean_pool(x, batch):
+        return x
 
 
 class GraphEncoderGAT(nn.Module):
@@ -356,8 +376,8 @@ class GraphEncoderGAT(nn.Module):
                     current_dim,
                     config.model.gat_dim,
                     heads=config.model.gat_heads,
-                    concat=False, # As in legacy/gan6.py, heads are averaged
-                    dropout=config.model.gat_dropout # Add dropout if specified
+                    concat=False,  # As in legacy/gan6.py, heads are averaged
+                    dropout=config.model.gat_dropout  # Add dropout if specified
                 )
             )
             current_dim = config.model.gat_dim
@@ -378,18 +398,18 @@ class GraphEncoderGAT(nn.Module):
             # x = F.dropout(x, p=self.config.model.gat_dropout, training=self.training)
 
         # Global mean pooling to get one vector per graph in the batch
-        graph_embeddings = global_mean_pool(x, batch_vector) # [B, gat_dim]
+        graph_embeddings = global_mean_pool(x, batch_vector)  # [B, gat_dim]
 
-        z_graph = self.lin(graph_embeddings) # [B, gan6_z_dim_graph_encoder_output]
+        z_graph = self.lin(graph_embeddings)  # [B, gan6_z_dim_graph_encoder_output]
         return z_graph
 
 
-class GeneratorCNN(nn.Module): # For gan6 architecture
+class GeneratorCNN(nn.Module):  # For gan6 architecture
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.image_size = config.image_size
-        self.init_size = config.model.gan6_gen_init_size # e.g., 4
+        self.init_size = config.model.gan6_gen_init_size  # e.g., 4
 
         # Combined z_dim: output from GraphEncoder + noise_z
         combined_z_dim = config.model.gan6_z_dim_graph_encoder_output + config.model.gan6_z_dim_noise
@@ -398,7 +418,7 @@ class GeneratorCNN(nn.Module): # For gan6 architecture
 
         num_upsamplings = int(math.log2(self.image_size / self.init_size))
 
-        current_channels = config.model.gan6_gen_feat_start # e.g., 512
+        current_channels = config.model.gan6_gen_feat_start  # e.g., 512
 
         self.upsampling_blocks = nn.ModuleList()
         for i in range(num_upsamplings):
@@ -427,19 +447,19 @@ class GeneratorCNN(nn.Module): # For gan6 architecture
             batch_size (int): Current batch size to generate noise.
         """
         z_noise = torch.randn(batch_size, self.config.model.gan6_z_dim_noise, device=z_graph.device)
-        combined_z = torch.cat([z_graph, z_noise], dim=1) # [B, combined_z_dim]
+        combined_z = torch.cat([z_graph, z_noise], dim=1)  # [B, combined_z_dim]
 
-        x = self.proj(combined_z) # [B, C_start * init_size^2]
+        x = self.proj(combined_z)  # [B, C_start * init_size^2]
         x = x.view(batch_size, self.config.model.gan6_gen_feat_start, self.init_size, self.init_size)
 
         for block in self.upsampling_blocks:
             x = block(x)
 
-        image = torch.tanh(self.to_rgb(x)) # Output [-1, 1]
+        image = torch.tanh(self.to_rgb(x))  # Output [-1, 1]
         return image
 
 
-class DiscriminatorCNN(nn.Module): # For gan6 architecture
+class DiscriminatorCNN(nn.Module):  # For gan6 architecture
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -447,7 +467,7 @@ class DiscriminatorCNN(nn.Module): # For gan6 architecture
 
         layers = []
         in_channels = 3
-        current_channels = config.model.gan6_d_feat_start # e.g., 64
+        current_channels = config.model.gan6_d_feat_start  # e.g., 64
 
         # Number of downsampling layers determined by image size and desired final feature map size
         # legacy/gan6 had 4 downsampling layers (4,2,1 convs) for 256 -> 256/16 = 16
@@ -455,10 +475,11 @@ class DiscriminatorCNN(nn.Module): # For gan6 architecture
         # legacy/gan6 used kernel 4, stride 2, padding 1. This reduces size by half.
         # For 256 image, 4 layers: 256->128->64->32->16. Final map size is 16x16.
 
-        num_downsampling_layers = int(math.log2(self.image_size / config.model.gan6_d_final_conv_size)) # e.g. log2(256/16) = 4 for legacy
+        num_downsampling_layers = int(
+            math.log2(self.image_size / config.model.gan6_d_final_conv_size))  # e.g. log2(256/16) = 4 for legacy
 
         for i in range(num_downsampling_layers):
-            out_channels = current_channels * 2 if i < 3 else current_channels # Cap channels like StyleGAN D
+            out_channels = current_channels * 2 if i < 3 else current_channels  # Cap channels like StyleGAN D
             # legacy/gan6 D: feats = [d, d*2, d*4, d*8]. So always doubles.
             out_channels = current_channels * 2
 
@@ -474,19 +495,18 @@ class DiscriminatorCNN(nn.Module): # For gan6 architecture
 
         # Calculate feature map size after convolutions
         # Each (K=4,S=2,P=1) layer halves spatial dim.
-        final_feature_map_size = self.image_size // (2**num_downsampling_layers)
+        final_feature_map_size = self.image_size // (2 ** num_downsampling_layers)
 
         fc_input_features = current_channels * (final_feature_map_size ** 2)
         self.fc = nn.Linear(fc_input_features, 1)
-        if config.model.gan6_d_spectral_norm_fc: # Separate flag for FC spectral norm
+        if config.model.gan6_d_spectral_norm_fc:  # Separate flag for FC spectral norm
             self.fc = spectral_norm(self.fc)
-
 
     def forward(self, image):
         x = self.conv_net(image)
-        x = x.view(x.size(0), -1) # Flatten
+        x = x.view(x.size(0), -1)  # Flatten
         logits = self.fc(x)
-        return logits.squeeze(1) # Output [B] for BCEWithLogitsLoss
+        return logits.squeeze(1)  # Output [B] for BCEWithLogitsLoss
 
 
 print("src/models.py created and populated with Generator, Discriminator, and helper modules.")
