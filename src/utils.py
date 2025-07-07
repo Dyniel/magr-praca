@@ -346,5 +346,122 @@ def convert_image_to_pyg_graph(image_numpy_array_01, num_superpixels, slic_compa
 
     return Data(x=x, edge_index=edge_index)
 
+def generate_spatial_superpixel_map(segments_map_batch, num_channels_out, image_size, num_superpixels_total, real_images_batch_01=None):
+    """
+    Generates a spatial map representation of superpixels.
+    Args:
+        segments_map_batch (torch.Tensor): Batch of segmentation masks [B, H, W] with superpixel IDs.
+        num_channels_out (int): Desired number of output channels for the map.
+                                (e.g., 1 for normalized IDs, 3 for mean color, S for one-hot (not recommended for large S)).
+        image_size (int): Target H and W for the output map.
+        num_superpixels_total (int): The maximum number of superpixels segments_map_batch IDs go up to. Used for normalization or one-hot.
+        real_images_batch_01 (torch.Tensor, optional): Batch of real images [B, 3, H, W] in [0,1] range,
+                                                     used if num_channels_out=3 (mean color).
+    Returns:
+        torch.Tensor: Spatial superpixel map [B, num_channels_out, H, W].
+    """
+    B, H, W = segments_map_batch.shape
+    device = segments_map_batch.device
+    output_map = torch.zeros(B, num_channels_out, H, W, device=device)
+
+    if H != image_size or W != image_size:
+        # This case should ideally be avoided by ensuring segments_map_batch matches target image_size.
+        # If not, we might need to resize segments_map_batch (nearest neighbor) and real_images_batch_01 (bilinear).
+        # For simplicity, assuming H, W already match image_size.
+        pass
+
+
+    if num_channels_out == 1: # Normalized segment IDs
+        # Normalize segment IDs to [0, 1] or [-1, 1] - let's use [0,1] for now.
+        # This is a very basic representation.
+        normalized_segments = segments_map_batch.float() / (num_superpixels_total - 1)
+        output_map = normalized_segments.unsqueeze(1) # [B, 1, H, W]
+
+    elif num_channels_out == 3 and real_images_batch_01 is not None: # Mean color map
+        if real_images_batch_01.shape[0] != B or real_images_batch_01.shape[2] != H or real_images_batch_01.shape[3] != W:
+            raise ValueError("Real images batch dimensions mismatch segments map batch for mean color map.")
+
+        for b_idx in range(B):
+            img_single = real_images_batch_01[b_idx] # [3, H, W]
+            seg_single = segments_map_batch[b_idx]   # [H, W]
+
+            unique_sp_ids = torch.unique(seg_single)
+            mean_colors_sp = torch.zeros(num_superpixels_total, 3, device=device) # Max S possible IDs
+
+            for sp_id_val in unique_sp_ids:
+                sp_id = sp_id_val.item()
+                if sp_id >= num_superpixels_total: continue # Should not happen with good segmentation
+                mask = (seg_single == sp_id) # [H, W]
+                if mask.sum() > 0:
+                    # Calculate mean color for this superpixel
+                    # img_single is [3, H, W], mask is [H,W]
+                    # We want to select pixels from img_single where mask is true, then mean over selected pixels for each channel
+                    for ch in range(3):
+                        mean_colors_sp[sp_id, ch] = img_single[ch][mask].mean()
+
+            # Scatter mean colors back to the image grid
+            # output_map[b_idx] is [3, H, W]
+            # seg_single_long = seg_single.long() # Ensure it's long for indexing
+            # This scatter is tricky. A simpler way for small S: iterate unique_sp_ids
+            for sp_id_val in unique_sp_ids:
+                sp_id = sp_id_val.item()
+                if sp_id >= num_superpixels_total: continue
+                mask = (seg_single == sp_id)
+                for ch in range(3):
+                    output_map[b_idx, ch, mask] = mean_colors_sp[sp_id, ch]
+
+    elif num_channels_out == num_superpixels_total: # One-hot encoding (careful with memory for large S)
+        # This is memory intensive if S is large (e.g. 150 channels for 256x256 image)
+        # F.one_hot expects class indices, so segments_map_batch needs to be long
+        one_hot = F.one_hot(segments_map_batch.long(), num_classes=num_superpixels_total) # [B, H, W, S]
+        output_map = one_hot.permute(0, 3, 1, 2).float() # [B, S, H, W]
+
+    else:
+        print(f"Warning: generate_spatial_superpixel_map unsupported num_channels_out={num_channels_out}. Returning zeros.")
+
+    return output_map
+
+def calculate_mean_superpixel_features(images_batch_01, segments_map_batch, num_superpixels_total, feature_dim=3):
+    """
+    Calculates mean features (e.g., RGB color) for each superpixel in a batch.
+    Args:
+        images_batch_01 (torch.Tensor): Batch of images [B, C, H, W], normalized to [0,1]. C should match feature_dim.
+        segments_map_batch (torch.Tensor): Batch of segmentation masks [B, H, W].
+        num_superpixels_total (int): Max number of superpixels S.
+        feature_dim (int): Dimensionality of features to calculate (e.g., 3 for RGB).
+    Returns:
+        torch.Tensor: Mean features per superpixel [B, S, feature_dim].
+    """
+    B, C, H, W = images_batch_01.shape
+    device = images_batch_01.device
+
+    if C != feature_dim:
+        raise ValueError(f"Image channels {C} must match feature_dim {feature_dim} for mean feature calculation.")
+
+    all_mean_features = torch.zeros(B, num_superpixels_total, feature_dim, device=device)
+
+    for b_idx in range(B):
+        img_single = images_batch_01[b_idx]  # [C, H, W]
+        seg_single = segments_map_batch[b_idx] # [H, W]
+
+        # Ensure seg_single is on the same device and long type for bincount/unique
+        seg_single_flat = seg_single.flatten().long()
+
+        for c_idx in range(feature_dim):
+            img_channel_flat = img_single[c_idx].flatten()
+            # Sum features per superpixel using bincount weights
+            sum_feats_per_sp = torch.bincount(seg_single_flat, weights=img_channel_flat, minlength=num_superpixels_total)
+            # Count pixels per superpixel
+            pixel_counts_per_sp = torch.bincount(seg_single_flat, minlength=num_superpixels_total)
+
+            # Avoid division by zero for superpixels not present or empty
+            valid_mask = pixel_counts_per_sp > 0
+            mean_feats_this_channel = torch.zeros_like(sum_feats_per_sp, dtype=img_single.dtype)
+            mean_feats_this_channel[valid_mask] = sum_feats_per_sp[valid_mask] / pixel_counts_per_sp[valid_mask]
+
+            all_mean_features[b_idx, :, c_idx] = mean_feats_this_channel
+
+    return all_mean_features
+
 
 print("src/utils.py created and populated.")

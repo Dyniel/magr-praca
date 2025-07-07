@@ -147,6 +147,85 @@ class ModelConfig:
     gan6_num_superpixels: int = 200      # Default for gan6, can differ from global num_superpixels
     gan6_slic_compactness: float = 10.0  # Default for gan6
 
+    # --- Parameters for DCGAN architecture ---
+    dcgan_g_feat: int = 64 # Feature map size for DCGAN Generator
+    dcgan_d_feat: int = 64 # Feature map size for DCGAN Discriminator
+
+    # --- Parameters for StyleGAN2 architecture ---
+    stylegan2_z_dim: int = 512
+    stylegan2_w_dim: int = 512
+    stylegan2_n_mlp: int = 8 # Number of layers in mapping network
+    stylegan2_lr_mul_mapping: float = 0.01 # Learning rate multiplier for mapping network
+    stylegan2_channel_multiplier: int = 2 # Channel multiplier for G and D resolutions
+    # stylegan2_blur_kernel: list[int] = field(default_factory=lambda: [1,3,3,1]) # Blur kernel for FIR filtering
+    # stylegan2_g_reg_every: int = 4 # How often to perform G path regularization (if implemented)
+    # stylegan2_d_reg_every: int = 16 # How often to perform D R1 regularization
+
+    # --- Parameters for StyleGAN3 architecture (simplified) ---
+    stylegan3_z_dim: int = 512
+    stylegan3_w_dim: int = 512
+    stylegan3_n_mlp: int = 8
+    stylegan3_lr_mul_mapping: float = 0.01
+    stylegan3_channel_multiplier: int = 2
+    stylegan3_fir_kernel: list[int] = field(default_factory=lambda: [1,3,3,1]) # Basic FIR kernel for up/downsampling (simplified)
+    # stylegan3_magnitude_ema_beta: float = 0.5 # For magnitude-based EMA in some variants
+
+    # --- Parameters for Projected GAN architecture ---
+    # As ProjectedGANGenerator inherits StyleGAN2Generator, it will use stylegan2_* G params from above.
+    # We only need D-specific and feature extractor specific params here for ProjectedGAN.
+
+    # --- Superpixel Conditioning Configs (applied per model type if flags are set) ---
+    # General flag to enable any superpixel feature processing for a model
+    use_superpixel_conditioning: bool = False # Top-level switch, if False, model-specific flags are ignored
+
+    # C1: Spatial Conditioning for Generator (input concat)
+    # Number of channels for the spatial superpixel map (e.g., 1 for segment IDs, 3 for mean color map, S for one-hot)
+    superpixel_spatial_map_channels_g: int = 1
+
+    # C4: Spatial Conditioning for Discriminator (input concat)
+    superpixel_spatial_map_channels_d: int = 1
+
+    # C2: Latent Code Modulation from Superpixel Embedding
+    # Parameters for a simple superpixel feature encoder (e.g., MLP on mean colors)
+    superpixel_latent_encoder_enabled: bool = False
+    superpixel_feature_dim: int = 3 # e.g., RGB mean color
+    superpixel_latent_encoder_hidden_dims: list[int] = field(default_factory=lambda: [64, 128])
+    superpixel_latent_embedding_dim: int = 128 # Output dim of z_sp
+
+    # Model-specific flags to enable types of conditioning
+    # For DCGAN
+    dcgan_g_spatial_cond: bool = False # Enable C1 for DCGAN G
+    dcgan_g_latent_cond: bool = False  # Enable C2 for DCGAN G
+    dcgan_d_spatial_cond: bool = False # Enable C4 for DCGAN D
+
+    # For StyleGAN2
+    stylegan2_g_spatial_cond: bool = False # Enable C1 for StyleGAN2 G (e.g. concat to initial const or early layer)
+    stylegan2_g_latent_cond: bool = False  # Enable C2 for StyleGAN2 G (e.g. concat to z or modulate w)
+    stylegan2_d_spatial_cond: bool = False # Enable C4 for StyleGAN2 D
+
+    # For StyleGAN3 (simplified)
+    stylegan3_g_spatial_cond: bool = False # C1 for StyleGAN3 G (e.g. concat to fourier features if made spatial)
+    stylegan3_g_latent_cond: bool = False  # C2 for StyleGAN3 G
+    stylegan3_d_spatial_cond: bool = False # C4 for StyleGAN3 D
+
+    # For ProjectedGAN (Generator is StyleGAN2 based, Discriminator is custom)
+    # G conditioning will be via stylegan2_*_cond flags if ProjectedGAN G uses them.
+    # For D, it's specific.
+    projectedgan_d_spatial_cond: bool = False # C4 for ProjectedGAN D's own path
+
+    # For gan5_gcn (already superpixel based) - ablation might mean *disabling* parts
+    gan5_gcn_disable_gcn_blocks: bool = False # Example ablation for gan5
+
+    # For gan6_gat_cnn (already superpixel based) - ablation might mean zeroing graph embedding
+    gan6_gat_cnn_use_null_graph_embedding: bool = False # Example ablation for gan6
+    projectedgan_d_channel_multiplier: int = 2
+    projectedgan_blur_kernel: list[int] = field(default_factory=lambda: [1,3,3,1])
+    projectedgan_feature_extractor_name: str = "resnet50" # e.g., "resnet50", "efficientnet_b0"
+    # projectedgan_feature_extractor_path: Optional[str] = None # Optional path to custom weights
+    projectedgan_feature_layers_to_extract: Optional[list[str]] = None # Layers from feature extractor, if None, model defaults used
+    projectedgan_projection_dims: int = 256 # Example dim if D were to project features (not used in current D model)
+    projectedgan_feature_matching_loss_weight: float = 10.0 # Weight for feature matching loss for G
+
 
 # Example of how to use:
 # from omegaconf import OmegaConf
