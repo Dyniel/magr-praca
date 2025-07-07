@@ -21,6 +21,7 @@ else:
 
 
 class SuperpixelDataset(Dataset): # For gan5-style models
+
     def __init__(self, image_paths, config, data_split_name="train", transform=None, target_transform=None):
         """
         Args:
@@ -57,6 +58,7 @@ class SuperpixelDataset(Dataset): # For gan5-style models
                  self.image_paths = get_image_paths(config.dataset_path_val)
             elif not self.image_paths and hasattr(config, 'dataset_path_test') and data_split_name == "test":
                  self.image_paths = get_image_paths(config.dataset_path_test)
+
 
             if not self.image_paths:
                 raise ValueError(f"No image paths provided or found for split '{data_split_name}' for precomputation.")
@@ -126,6 +128,7 @@ class SuperpixelDataset(Dataset): # For gan5-style models
             image_tensor = self.transform(image)
 
         if self.target_transform: # Should not be used typically
+
             segments = self.target_transform(segments)
             adj_matrix = self.target_transform(adj_matrix)
 
@@ -135,6 +138,7 @@ class SuperpixelDataset(Dataset): # For gan5-style models
             "adj": adj_matrix,
             "path": img_path
         }
+
 
 class ImageToGraphDataset(Dataset):
     def __init__(self, image_paths, config, data_split_name="train", image_transform=None):
@@ -177,6 +181,7 @@ class ImageToGraphDataset(Dataset):
                  print(f"Warning: No image paths found for split '{self.data_split_name}' during graph cache preparation.")
                  return # Or raise error, but returning allows dataloader to be None later
 
+
         for img_path in self.image_paths:
             base_name = os.path.splitext(os.path.basename(img_path))[0]
             cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
@@ -187,6 +192,7 @@ class ImageToGraphDataset(Dataset):
         if missing_cache_files:
             print(f"Preprocessing images to PyG graphs for caching (split: {self.data_split_name})...")
             if not self.image_paths: # Should be populated above, but double check
+
                 print(f"Error: No image paths to process for graph caching for split '{self.data_split_name}'.")
                 return
 
@@ -252,6 +258,7 @@ def collate_graphs(batch):
         if not valid_graphs: # All graphs were None
              return None # Or handle differently, e.g. return empty tensors / special batch
 
+
     # If after filtering, valid_graphs is empty but real_images might not be (if some graphs failed)
     # This would cause PyGBatch.from_data_list to fail if valid_graphs is empty.
     if not valid_graphs:
@@ -286,6 +293,7 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
         return None
 
     # Apply debug_num_images only for training split for faster debugging cycles on other splits
+
     if data_split == "train" and config.debug_num_images > 0 and config.debug_num_images < len(image_paths):
         print(f"Using a subset of {config.debug_num_images} images for training debugging.")
         image_paths = image_paths[:config.debug_num_images]

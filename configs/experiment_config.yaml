@@ -13,6 +13,7 @@ image_size: 256
 num_superpixels: 200 # This is the global one, used by gan5 SuperpixelDataset
 slic_compactness: 15.0 # This is the global one, used by gan5 SuperpixelDataset
 debug_num_images: 0 # Set to 0 to use all images for a proper experiment
+num_workers: 0 # DEBUG: Set to 0 to test multiprocessing issue with PyG
 
 # --- Model Configuration ---
 model:

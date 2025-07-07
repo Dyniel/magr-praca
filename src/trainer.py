@@ -10,9 +10,11 @@ import shutil
 from PIL import Image
 from torchvision import transforms
 
+
 from src.models import (
     Generator as GeneratorGan5, Discriminator as DiscriminatorGan5,
     GraphEncoderGAT, GeneratorCNN, DiscriminatorCNN
+
 )
 from src.data_loader import get_dataloader # Assumes updated version with data_split
 from src.utils import (
@@ -42,6 +44,7 @@ class Trainer:
             print("pytorch-fid not found. FID calculation will be disabled.")
             if hasattr(self.config, 'enable_fid_calculation'):
                 self.config.enable_fid_calculation = False
+
 
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
@@ -108,6 +111,7 @@ class Trainer:
             self.load_training_checkpoint(self.config.resume_checkpoint_path)
         # else: current_epoch and current_step remain 0
 
+
     def load_training_checkpoint(self, checkpoint_path):
         optE_to_load = self.optE if self.model_architecture == "gan6_gat_cnn" else None
         model_e_to_load = self.E if self.model_architecture == "gan6_gat_cnn" else None
@@ -116,11 +120,11 @@ class Trainer:
         completed_epoch, optimizer_step_at_checkpoint = load_checkpoint(
             checkpoint_path, self.G, self.D, model_e_to_load,
             self.optG, self.optD, optE_to_load, self.device
+
         )
         self.current_epoch = completed_epoch + 1 # Start training from the next epoch
         self.current_step = optimizer_step_at_checkpoint # Resume optimizer steps
         print(f"Resumed from checkpoint. Last completed epoch: {completed_epoch}. Next epoch to run: {self.current_epoch}. Resuming optimizer step: {self.current_step}")
-
 
     def _prepare_fixed_sample_batch(self):
         try:
