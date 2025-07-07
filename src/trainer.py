@@ -13,6 +13,8 @@ from src.models import (
     GraphEncoderGAT, GeneratorCNN, DiscriminatorCNN  # gan6 models
 )
 from src.data_loader import get_dataloader
+from torch_geometric.data import Batch as PyGBatch  # For collating lists of Data objects
+from torch_geometric.data import Data as PyGData  # For type checking
 from src.utils import (
     save_checkpoint, load_checkpoint, setup_wandb, log_to_wandb,
     denormalize_image  # To convert [-1,1] to [0,1] for logging images
@@ -143,9 +145,17 @@ class Trainer:
                 # Let's assume the dataloader's batch for fixed samples is small enough or use all of it.
                 # The GraphEncoder expects a PyGBatch.
                 # We need to slice the graph_batch_pyg. Slicing PyGBatch: batch[:num_samples]
+
+                # Ensure graph_batch_pyg is a PyGBatch object
+                if isinstance(graph_batch_pyg, list) and all(isinstance(g, PyGData) for g in graph_batch_pyg):
+                    graph_batch_pyg = PyGBatch.from_data_list(graph_batch_pyg)
+
+                # Now, it should be safe to slice and send to device
+                sliced_graph_batch = graph_batch_pyg[:num_samples]
+
                 return {
                     "image": real_images_tensor[:num_samples].to(self.device),  # Real images for D
-                    "graph_batch": graph_batch_pyg[:num_samples].to(self.device)  # Graph data for E
+                    "graph_batch": sliced_graph_batch.to(self.device)  # Graph data for E
                 }
             return None
         except Exception as e:
@@ -697,10 +707,27 @@ class Trainer:
                     fake_images_batch = self.G(z, real_images_cond, segments_map_cond, adj_matrix_cond)
                 elif self.model_architecture == "gan6_gat_cnn":
                     _real_images_input_ignored, graph_batch_pyg_cond = raw_batch_data_fid
+
+                    # Ensure graph_batch_pyg_cond is a PyGBatch object before slicing and sending to device
+                    # It might come as a list of Data objects from the dataloader
+                    if isinstance(graph_batch_pyg_cond, list) and all(
+                            isinstance(g, PyGData) for g in graph_batch_pyg_cond):
+                        # Collate into a Batch object first
+                        graph_batch_pyg_cond = PyGBatch.from_data_list(graph_batch_pyg_cond)
+
                     graph_batch_pyg_cond = graph_batch_pyg_cond.to(self.device)
+
+                    # Slicing a PyGBatch object returns another PyGBatch object
                     sliced_graph_batch_cond = graph_batch_pyg_cond[:num_to_generate_this_iter]
-                    z_graph = self.E(sliced_graph_batch_cond)
-                    fake_images_batch = self.G(z_graph, num_to_generate_this_iter)
+
+                    # Ensure sliced_graph_batch_cond is not empty and is valid before passing to E
+                    if not isinstance(sliced_graph_batch_cond, PyGBatch) or sliced_graph_batch_cond.num_graphs == 0:
+                        print(
+                            f"Warning: Sliced graph batch for FID is invalid or empty (num_graphs: {sliced_graph_batch_cond.num_graphs if isinstance(sliced_graph_batch_cond, PyGBatch) else 'Not a PyGBatch'}). Skipping this iteration for FID.")
+                        # fake_images_batch will remain None, handled below
+                    else:
+                        z_graph = self.E(sliced_graph_batch_cond)
+                        fake_images_batch = self.G(z_graph, num_to_generate_this_iter)
 
             if fake_images_batch is not None:
                 for i in range(fake_images_batch.size(0)):
@@ -732,7 +759,7 @@ class Trainer:
             if saved_real_count >= num_fid_images: break
 
             real_images_batch_save = raw_batch_data_real_save["image"] if self.model_architecture == "gan5_gcn" else \
-            raw_batch_data_real_save[0]
+                raw_batch_data_real_save[0]
             num_to_save_this_iter = min(real_images_batch_save.size(0), num_fid_images - saved_real_count)
 
             for i in range(num_to_save_this_iter):
