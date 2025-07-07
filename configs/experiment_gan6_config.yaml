@@ -1,84 +1,68 @@
-# Example experiment_config.yaml for gan6_gat_cnn architecture
+# Example experiment_config.yaml for gan5_gcn architecture
 # This file can be used to override defaults from BaseConfig.
 
 # --- System and Paths ---
-project_name: "SuperpixelGAN_Refactored_gan6"
-run_name: "gan6_gat_cnn_test_run"
-# dataset_path: "/path/to/your/dataset" # Ensure this is correct
-# output_dir_base: "/experiment_outputs" # Ensure this is correct
-# cache_dir: "superpixel_cache" # Base cache dir, subdirs will be created per config
+project_name: "SuperpixelGAN_LungSCC_Experiment1"
+run_name: "gan5_refactored_lr_1e-5_bs_8"
+# dataset_path: "/path/to/your/custom_dataset" # Override if needed
+# cache_dir: "custom_cache_location" # Override if needed
+# output_dir_base: "/shared_drive/my_gan_experiments" # Override if needed
 
 # --- Data and Preprocessing ---
 image_size: 256
-# num_superpixels: 150 # This is global, gan6 uses model.gan6_num_superpixels
-# slic_compactness: 10.0 # This is global, gan6 uses model.gan6_slic_compactness
-debug_num_images: 0 # Set to >0 for quick testing, e.g., 16
+num_superpixels: 200 # This is the global one, used by gan5 SuperpixelDataset
+slic_compactness: 15.0 # This is the global one, used by gan5 SuperpixelDataset
+debug_num_images: 0 # Set to 0 to use all images for a proper experiment
+num_workers: 0 # DEBUG: Set to 0 to test multiprocessing issue with PyG
 
 # --- Model Configuration ---
 model:
-  architecture: "gan6_gat_cnn"
+  architecture: "gan6_gat_cnn" # Switched to gan6 architecture
 
-  # Shared z_dim (not directly used by gan6 G/E in the same way as gan5, but can be a reference)
-  # z_dim: 128
+  # Shared z_dim (used by gan5 G, less directly by gan6 G which uses specific z_dims below)
+  z_dim: 256 # This will be available in config.model.z_dim
 
-  # Parameters for gan6_gat_cnn architecture
-  # Graph Encoder (E for gan6)
-  gat_dim: 128
-  gat_heads: 4
-  gat_layers: 3
-  gat_dropout: 0.0
-  gan6_z_dim_graph_encoder_output: 128 # z_graph output dim
-
-  # Generator (G_cnn for gan6)
-  gan6_z_dim_noise: 128                # z_noise dim
-  gan6_gen_init_size: 4                # Initial spatial size of feature map in G
-  gan6_gen_feat_start: 512             # Channels in the initial feature map of G
-  gan6_gen_spectral_norm: True         # Use SN in G_cnn conv layers
-
-  # Discriminator (D_cnn for gan6)
-  gan6_d_feat_start: 64                # Initial channels in D_cnn
-  gan6_d_final_conv_size: 16           # Spatial size of D_cnn feature map before FC layer
-  gan6_d_spectral_norm: True           # Use SN in D_cnn conv layers
-  gan6_d_spectral_norm_fc: True        # Use SN in D_cnn final FC layer
-
-  # Superpixel settings specific to gan6 graph creation for ImageToGraphDataset
-  gan6_num_superpixels: 200
-  gan6_slic_compactness: 10.0
-
-  # gan5_gcn parameters (not used if architecture is gan6_gat_cnn, but shown for completeness of ModelConfig structure)
+  # Parameters for gan5_gcn architecture (will be ignored due to architecture switch)
   # g_channels: 128
   # g_num_gcn_blocks: 8
-  # ... etc. for gan5 specific params
+  # g_dropout_rate: 0.25
+  # g_ada_in: False
+  # g_spectral_norm: True
+  # g_final_norm: "instancenorm"
+  # d_channels: 64
+  # d_spectral_norm: True
 
+  # Parameters for gan6_gat_cnn architecture will primarily come from BaseConfig defaults
+  # unless overridden here. For example:
+  # gat_dim: 128 # Default from BaseConfig.ModelConfig
+  # gan6_z_dim_graph_encoder_output: 128 # Default
+  # gan6_z_dim_noise: 128 # Default
+  # gan6_num_superpixels: 200 # Default, matches top-level num_superpixels
 
 # --- Training Hyperparameters ---
-batch_size: 8 # Adjusted for potentially larger gan6 models
-num_epochs: 200
-g_lr: 2e-4 # Note: gan6 has E, G, D optimizers. This might need to be E_lr, G_lr, D_lr in BaseConfig or handled by Trainer.
-d_lr: 2e-4 # For now, BaseConfig has g_lr, d_lr. Trainer for gan6 will need to adapt.
-           # Let's assume g_lr applies to G and E, d_lr to D for now.
+batch_size: 8 # Reduced batch size from BaseConfig default
+num_epochs: 250 # Increased epochs from BaseConfig default
+g_lr: 1e-5 # Lower generator learning rate
+d_lr: 1e-4 # Lower discriminator learning rate
 beta1: 0.0
 beta2: 0.99
-r1_gamma: 10.0
-# d_updates_per_g_update: 1 # For gan6, typically 1 D step per 1 G+E step.
+r1_gamma: 5.0
+d_updates_per_g_update: 2
+gradient_accumulation_steps: 1 # Increase to trade computation for memory (effective_batch_size = batch_size * grad_accum_steps)
 
 # --- Logging and Evaluation ---
 use_wandb: True
-log_freq_step: 100
+# wandb_project_name: "MyCustomWandBProject" # Override if needed
+# wandb_run_name: "MyAmazingExperimentRun" # Override if needed
+log_freq_step: 50
 sample_freq_epoch: 1
 num_samples_to_log: 8
-checkpoint_freq_epoch: 10
+checkpoint_freq_epoch: 5
+
 enable_fid_calculation: True
-fid_freq_epoch: 10 # Calculate FID less frequently as it's costly
-fid_num_images: 1000 # Reduced for quicker testing, increase for proper eval (e.g. 5k-10k)
+fid_num_images: 50000
+fid_batch_size: 32
+fid_freq_epoch: 10 # Calculate FID less frequently
 
 # --- Resume Training ---
 # resume_checkpoint_path: null # or path/to/checkpoint.pth.tar
-
-# Note on learning rates for gan6:
-# The legacy/gan6.py used the same LR for E, G, and D.
-# The current BaseConfig has g_lr and d_lr.
-# For gan6, the Trainer will likely use config.g_lr for optG and optE, and config.d_lr for optD.
-# If separate LRs for E, G, D are needed, BaseConfig would need e_lr, g_lr, d_lr.
-# For now, sticking to existing g_lr/d_lr.
-print("configs/experiment_gan6_config.yaml example created.")

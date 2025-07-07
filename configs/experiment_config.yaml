@@ -60,7 +60,7 @@ num_samples_to_log: 8
 checkpoint_freq_epoch: 5
 
 enable_fid_calculation: True
-fid_num_images: 5000
+fid_num_images: 50000
 fid_batch_size: 32
 fid_freq_epoch: 10 # Calculate FID less frequently
 

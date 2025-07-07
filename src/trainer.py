@@ -836,26 +836,56 @@ class Trainer:
                 f"Warning: Only saved {saved_real_count}/{num_fid_images} real images for FID from '{data_split_for_reals}' split due to dataset size.")
 
         fid_value = float('nan')
-        if generated_count > 0 and saved_real_count > 0:
+
+        # Enhanced logging before FID calculation
+        num_files_real = len(os.listdir(current_fid_real_path)) if os.path.exists(current_fid_real_path) else 0
+        num_files_fake = len(os.listdir(current_fid_fake_path)) if os.path.exists(current_fid_fake_path) else 0
+
+        print(f"FID Pre-calculation check:")
+        print(f"  Target FID images (config.fid_num_images): {num_fid_images}")
+        print(f"  Saved real images (initial count): {saved_real_count}")
+        print(f"  Generated fake images (initial count): {generated_count}")
+        print(f"  Actual files in real images directory '{current_fid_real_path}': {num_files_real}")
+        print(f"  Actual files in fake images directory '{current_fid_fake_path}': {num_files_fake}")
+
+        if generated_count > 0 and saved_real_count > 0:  # Check against initial counts
             # Check for minimum number of images, pytorch-fid might require this
             min_images_for_fid = getattr(self.config, "fid_min_images", 10)  # Add to config if needed, default to 10
-            if generated_count >= min_images_for_fid and saved_real_count >= min_images_for_fid:
+
+            # Also consider the actual number of files found, as pytorch-fid will use these
+            if num_files_real >= min_images_for_fid and num_files_fake >= min_images_for_fid:
                 try:
+                    print(f"Attempting FID calculation with {num_files_real} real and {num_files_fake} fake images.")
                     fid_value = calculate_fid_given_paths(
                         paths=[current_fid_real_path, current_fid_fake_path],
                         batch_size=self.config.fid_batch_size,  # For Inception model
                         device=self.device,
-                        dims=2048,
+                        dims=2048,  # Standard InceptionV3 feature dimension
                         num_workers=self.config.num_workers
                     )
                     print(f"FID Score ({data_split_for_reals}): {fid_value:.4f}")
                 except Exception as e:
-                    print(f"Error calculating FID: {e}")
+                    # Enhanced error message
+                    error_message = (
+                        f"Error calculating FID: {e}\n"
+                        f"  Details for debugging:\n"
+                        f"    Target FID images (config.fid_num_images): {num_fid_images}\n"
+                        f"    Saved real images (initial count): {saved_real_count}\n"
+                        f"    Generated fake images (initial count): {generated_count}\n"
+                        f"    Actual files in real dir '{current_fid_real_path}': {num_files_real}\n"
+                        f"    Actual files in fake dir '{current_fid_fake_path}': {num_files_fake}\n"
+                        f"    Min images required by config (fid_min_images): {min_images_for_fid}"
+                    )
+                    print(error_message)
             else:
                 print(
-                    f"Skipping FID: Not enough images. Need at least {min_images_for_fid} of each. Got Real: {saved_real_count}, Fake: {generated_count}")
+                    f"Skipping FID: Not enough images based on actual files or initial counts. "
+                    f"Need at least {min_images_for_fid} of each. "
+                    f"Got Real (files): {num_files_real} (initial save count: {saved_real_count}), "
+                    f"Fake (files): {num_files_fake} (initial gen count: {generated_count})")
         else:
-            print("Not enough images generated or saved for FID calculation. Skipping.")
+            print(f"Not enough images generated or saved for FID calculation based on initial counts. "
+                  f"Skipping. Real initial: {saved_real_count}, Fake initial: {generated_count}")
 
         # Clean up temporary directories for this specific FID run if desired (or keep for debugging)
         # shutil.rmtree(current_fid_real_path)
