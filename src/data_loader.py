@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-from torchvision import transforms # Will be used for basic transforms if not passed custom ones
+from torchvision import transforms  # Will be used for basic transforms if not passed custom ones
 from tqdm import tqdm
 
 from src.utils import (
@@ -20,8 +20,7 @@ else:
     PyGData = None
 
 
-class SuperpixelDataset(Dataset): # For gan5-style models
-
+class SuperpixelDataset(Dataset):  # For gan5-style models
     def __init__(self, image_paths, config, data_split_name="train", transform=None, target_transform=None):
         """
         Args:
@@ -48,17 +47,17 @@ class SuperpixelDataset(Dataset): # For gan5-style models
 
         self.target_transform = target_transform
 
-        expected_compactness = getattr(config, 'slic_compactness', 10.0) # Default if not in config
+        expected_compactness = getattr(config, 'slic_compactness', 10.0)  # Default if not in config
 
         if not os.path.exists(self.cache_dir) or not os.listdir(self.cache_dir):
-            print(f"Cache directory {self.cache_dir} for split '{data_split_name}' not found or empty. Precomputing superpixels...")
+            print(
+                f"Cache directory {self.cache_dir} for split '{data_split_name}' not found or empty. Precomputing superpixels...")
             if not self.image_paths and hasattr(config, 'dataset_path') and data_split_name == "train":
-                 self.image_paths = get_image_paths(config.dataset_path)
+                self.image_paths = get_image_paths(config.dataset_path)
             elif not self.image_paths and hasattr(config, 'dataset_path_val') and data_split_name == "val":
-                 self.image_paths = get_image_paths(config.dataset_path_val)
+                self.image_paths = get_image_paths(config.dataset_path_val)
             elif not self.image_paths and hasattr(config, 'dataset_path_test') and data_split_name == "test":
-                 self.image_paths = get_image_paths(config.dataset_path_test)
-
+                self.image_paths = get_image_paths(config.dataset_path_test)
 
             if not self.image_paths:
                 raise ValueError(f"No image paths provided or found for split '{data_split_name}' for precomputation.")
@@ -73,7 +72,7 @@ class SuperpixelDataset(Dataset): # For gan5-style models
         else:
             print(f"Using existing cache directory for split '{data_split_name}': {self.cache_dir}")
             missing_files = False
-            for img_path in self.image_paths: # Ensure image_paths are populated before this loop
+            for img_path in self.image_paths:  # Ensure image_paths are populated before this loop
                 base_name = os.path.splitext(os.path.basename(img_path))[0]
                 cache_file_path = os.path.join(self.cache_dir, base_name + ".npz")
                 if not os.path.exists(cache_file_path):
@@ -84,15 +83,18 @@ class SuperpixelDataset(Dataset): # For gan5-style models
                 print(f"Some cache files are missing for split '{data_split_name}'. Re-running precomputation.")
                 # Repopulate image_paths if they were empty, specific to split
                 current_dataset_path = None
-                if data_split_name == "train": current_dataset_path = getattr(config, 'dataset_path', None)
-                elif data_split_name == "val": current_dataset_path = getattr(config, 'dataset_path_val', None)
-                elif data_split_name == "test": current_dataset_path = getattr(config, 'dataset_path_test', None)
+                if data_split_name == "train":
+                    current_dataset_path = getattr(config, 'dataset_path', None)
+                elif data_split_name == "val":
+                    current_dataset_path = getattr(config, 'dataset_path_val', None)
+                elif data_split_name == "test":
+                    current_dataset_path = getattr(config, 'dataset_path_test', None)
 
                 if not self.image_paths and current_dataset_path:
-                     self.image_paths = get_image_paths(current_dataset_path)
+                    self.image_paths = get_image_paths(current_dataset_path)
 
                 if not self.image_paths:
-                     raise ValueError(f"No image paths found for split '{data_split_name}' to re-run precomputation.")
+                    raise ValueError(f"No image paths found for split '{data_split_name}' to re-run precomputation.")
 
                 precompute_superpixels_for_dataset(
                     image_paths=self.image_paths,
@@ -127,8 +129,7 @@ class SuperpixelDataset(Dataset): # For gan5-style models
         if self.transform:
             image_tensor = self.transform(image)
 
-        if self.target_transform: # Should not be used typically
-
+        if self.target_transform:  # Should not be used typically
             segments = self.target_transform(segments)
             adj_matrix = self.target_transform(adj_matrix)
 
@@ -172,15 +173,18 @@ class ImageToGraphDataset(Dataset):
         # Ensure image_paths are populated
         if not self.image_paths:
             current_dataset_path = None
-            if self.data_split_name == "train": current_dataset_path = getattr(self.config, 'dataset_path', None)
-            elif self.data_split_name == "val": current_dataset_path = getattr(self.config, 'dataset_path_val', None)
-            elif self.data_split_name == "test": current_dataset_path = getattr(self.config, 'dataset_path_test', None)
+            if self.data_split_name == "train":
+                current_dataset_path = getattr(self.config, 'dataset_path', None)
+            elif self.data_split_name == "val":
+                current_dataset_path = getattr(self.config, 'dataset_path_val', None)
+            elif self.data_split_name == "test":
+                current_dataset_path = getattr(self.config, 'dataset_path_test', None)
             if current_dataset_path:
                 self.image_paths = get_image_paths(current_dataset_path)
-            if not self.image_paths: # If still no paths, can't proceed
-                 print(f"Warning: No image paths found for split '{self.data_split_name}' during graph cache preparation.")
-                 return # Or raise error, but returning allows dataloader to be None later
-
+            if not self.image_paths:  # If still no paths, can't proceed
+                print(
+                    f"Warning: No image paths found for split '{self.data_split_name}' during graph cache preparation.")
+                return  # Or raise error, but returning allows dataloader to be None later
 
         for img_path in self.image_paths:
             base_name = os.path.splitext(os.path.basename(img_path))[0]
@@ -191,8 +195,7 @@ class ImageToGraphDataset(Dataset):
 
         if missing_cache_files:
             print(f"Preprocessing images to PyG graphs for caching (split: {self.data_split_name})...")
-            if not self.image_paths: # Should be populated above, but double check
-
+            if not self.image_paths:  # Should be populated above, but double check
                 print(f"Error: No image paths to process for graph caching for split '{self.data_split_name}'.")
                 return
 
@@ -203,12 +206,13 @@ class ImageToGraphDataset(Dataset):
                     continue
                 try:
                     pil_img = Image.open(img_path).convert("RGB")
-                    pil_resized = pil_img.resize((self.config.image_size, self.config.image_size), Image.BILINEAR) # TODO: check interpolation consistency
+                    pil_resized = pil_img.resize((self.config.image_size, self.config.image_size),
+                                                 Image.BILINEAR)  # TODO: check interpolation consistency
                     img_np_01 = np.array(pil_resized).astype(np.float32) / 255.0
                     if img_np_01.ndim == 2:
-                         img_np_01 = np.expand_dims(img_np_01, axis=-1)
-                    if img_np_01.shape[-1] != 3 and img_np_01.shape[-1] == 1 :
-                        img_np_01 = np.concatenate([img_np_01]*3, axis=-1)
+                        img_np_01 = np.expand_dims(img_np_01, axis=-1)
+                    if img_np_01.shape[-1] != 3 and img_np_01.shape[-1] == 1:
+                        img_np_01 = np.concatenate([img_np_01] * 3, axis=-1)
 
                     graph_data = convert_image_to_pyg_graph(
                         img_np_01,
@@ -254,10 +258,10 @@ def collate_graphs(batch):
     valid_graphs = [g for g in graph_data_objects if g is not None]
 
     if len(valid_graphs) != len(graph_data_objects):
-        print(f"Warning: Some graph data objects were None. Found {len(valid_graphs)} valid graphs out of {len(graph_data_objects)}.")
-        if not valid_graphs: # All graphs were None
-             return None # Or handle differently, e.g. return empty tensors / special batch
-
+        print(
+            f"Warning: Some graph data objects were None. Found {len(valid_graphs)} valid graphs out of {len(graph_data_objects)}.")
+        if not valid_graphs:  # All graphs were None
+            return None  # Or handle differently, e.g. return empty tensors / special batch
 
     # If after filtering, valid_graphs is empty but real_images might not be (if some graphs failed)
     # This would cause PyGBatch.from_data_list to fail if valid_graphs is empty.
@@ -267,7 +271,7 @@ def collate_graphs(batch):
         # For now, if no valid graphs, we can't form a batch.
         # Consider returning None or an empty structure that the training loop can skip.
         print("Warning: No valid graphs in batch after filtering. Skipping batch.")
-        return None # This will need to be handled by the training loop
+        return None  # This will need to be handled by the training loop
 
     return torch.stack(real_images), PyGBatch.from_data_list(valid_graphs)
 
@@ -292,8 +296,7 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
         print(f"No images found in {dataset_path} for split '{data_split}'. DataLoader will not be created.")
         return None
 
-    # Apply debug_num_images only for training split for faster debugging cycles on other splits
-
+        # Apply debug_num_images only for training split for faster debugging cycles on other splits
     if data_split == "train" and config.debug_num_images > 0 and config.debug_num_images < len(image_paths):
         print(f"Using a subset of {config.debug_num_images} images for training debugging.")
         image_paths = image_paths[:config.debug_num_images]
@@ -303,7 +306,6 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
         if num_debug < len(image_paths):
             print(f"Using a subset of {num_debug} images for {data_split} split debugging.")
             image_paths = image_paths[:num_debug]
-
 
     dataset_type = getattr(config.model, "architecture", "gan5_gcn")
     dataset = None
@@ -327,7 +329,6 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
     if data_split in ["val", "test"] and hasattr(config, "eval_batch_size") and config.eval_batch_size is not None:
         current_batch_size = config.eval_batch_size
         print(f"Using eval_batch_size: {current_batch_size} for {data_split} split.")
-
 
     # For val/test, drop_last is typically False to evaluate all samples
     effective_drop_last = drop_last if data_split == "train" else False
