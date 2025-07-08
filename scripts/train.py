@@ -31,10 +31,17 @@ def main():
 
     # Apply command-line overrides
     if unknown_args:
+        processed_unknown_args = []
+        for arg in unknown_args:
+            if arg.startswith("--"):
+                processed_unknown_args.append(arg[2:]) # Remove "--"
+            else:
+                processed_unknown_args.append(arg)
         try:
-            cli_overrides = OmegaConf.from_dotlist(unknown_args)
+            print(f"Processing dotlist overrides from: {processed_unknown_args}")
+            cli_overrides = OmegaConf.from_dotlist(processed_unknown_args)
             conf = OmegaConf.merge(conf, cli_overrides)
-            print(f"Applied CLI overrides: {unknown_args}")
+            print(f"Applied CLI overrides from original args: {unknown_args}")
         except Exception as e:
             print(f"Error applying CLI overrides: {e}.")
 

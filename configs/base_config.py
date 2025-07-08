@@ -15,8 +15,9 @@ class BaseConfig:
     # Directory to cache precomputed superpixels
     cache_dir: str = "superpixel_cache"
     num_workers: int = 4 # For DataLoader
-    device: str = "cuda" # "cuda" or "cpu"
-    seed: int = 42 # For reproducibility
+    device: str = "cuda" # "cuda" or "cpu". Trainer will verify availability and fallback to CPU if needed.
+    use_cuda: bool = True # Explicit flag, though `device` field is primary. Kept for compatibility if Trainer directly uses it.
+    seed: Optional[int] = 42 # For reproducibility, None means no explicit seed setting in main script.
 
     # --- Data and Preprocessing ---
     image_size: int = 256
@@ -29,14 +30,14 @@ class BaseConfig:
     # This will be a nested structure, defined below
     model: 'ModelConfig' = field(default_factory=lambda: ModelConfig())
 
+    # --- Optimizer Configuration ---
+    optimizer: 'OptimizerConfig' = field(default_factory=lambda: OptimizerConfig())
+
     # --- Training Hyperparameters ---
     batch_size: int = 16
     num_epochs: int = 200
-    g_lr: float = 5e-5
-    d_lr: float = 2e-4
-    beta1: float = 0.0 # Adam optimizer beta1
-    beta2: float = 0.99 # Adam optimizer beta2
-    r1_gamma: float = 5.0 # R1 gradient penalty weight for Discriminator
+    # g_lr, d_lr, beta1, beta2 are now in OptimizerConfig
+    r1_gamma: float = 5.0 # R1 gradient penalty weight for Discriminator. This is sweepable directly.
     # d_steps_per_g_step: int = 2 # Number of D updates per G update (from gan5)
     # Let's rename for clarity:
     d_updates_per_g_update: int = 2
@@ -79,25 +80,48 @@ class BaseConfig:
         # Construct the full output directory for this run
         self.output_dir_run = os.path.join(self.output_dir_base, self.project_name, self.run_name)
 
-        # Ensure model defaults are populated correctly after potential merges
+        # Ensure model and optimizer defaults are populated correctly after potential merges
         if not isinstance(self.model, ModelConfig):
             current_model_config_dict = {}
             if self.model is not None:
-                from omegaconf import OmegaConf  # Local import for this check
+                from omegaconf import OmegaConf
                 if OmegaConf.is_config(self.model):
                     current_model_config_dict = OmegaConf.to_container(self.model, resolve=True)
                 elif isinstance(self.model, dict):
                     current_model_config_dict = self.model
-
-            # Create a new ModelConfig with its own defaults
             default_model_conf = ModelConfig()
-            # Update its fields with any values that were present in the merged config for the model section
             for key, value in current_model_config_dict.items():
-                if hasattr(default_model_conf, key):
-                    setattr(default_model_conf, key, value)
+                if hasattr(default_model_conf, key): setattr(default_model_conf, key, value)
             self.model = default_model_conf
-        elif self.model is None:  # Should be caught by default_factory, but defensive
-            self.model = ModelConfig()
+        elif self.model is None: self.model = ModelConfig()
+
+        if not isinstance(self.optimizer, OptimizerConfig):
+            current_optimizer_config_dict = {}
+            if self.optimizer is not None:
+                from omegaconf import OmegaConf
+                if OmegaConf.is_config(self.optimizer):
+                    current_optimizer_config_dict = OmegaConf.to_container(self.optimizer, resolve=True)
+                elif isinstance(self.optimizer, dict):
+                    current_optimizer_config_dict = self.optimizer
+            default_optimizer_conf = OptimizerConfig()
+            for key, value in current_optimizer_config_dict.items():
+                if hasattr(default_optimizer_conf, key): setattr(default_optimizer_conf, key, value)
+            self.optimizer = default_optimizer_conf
+        elif self.optimizer is None: self.optimizer = OptimizerConfig()
+
+
+@dataclass
+class OptimizerConfig:
+    """Configuration for optimizers."""
+    g_lr: float = 5e-5
+    d_lr: float = 2e-4
+    beta1: float = 0.0 # Adam optimizer beta1 for G and D
+    beta2: float = 0.99 # Adam optimizer beta2 for G and D
+    # Potentially add separate betas for G and D if needed:
+    # g_beta1: float = 0.0
+    # g_beta2: float = 0.99
+    # d_beta1: float = 0.0
+    # d_beta2: float = 0.99
 
 
 @dataclass
