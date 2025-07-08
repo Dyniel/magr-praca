@@ -23,14 +23,13 @@ parameters:
 
   # --- Hyperparameters to Tune ---
   g_lr: # Learning rate for Generator (and Encoder in current gan6 setup)
-    distribution: log_uniform_values
-    min: 1e-6
-    max: 1e-3
+    # Using specific values if log_uniform_values is problematic with legacy service
+    values: [1e-6, 5e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3]
 
   d_lr: # Learning rate for Discriminator
-    distribution: log_uniform_values
-    min: 1e-6
-    max: 1e-3
+    # Using specific values if log_uniform_values is problematic with legacy service
+    values: [1e-6, 5e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3]
+
 
   r1_gamma:
     distribution: uniform
