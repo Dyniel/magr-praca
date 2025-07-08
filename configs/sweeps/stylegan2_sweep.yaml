@@ -35,6 +35,7 @@ parameters:
     # Using specific values if log_uniform_values is problematic with legacy service
     values: [1e-6, 5e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3]
 
+
   # Adam betas (can be tuned if desired, or kept fixed from base_for_sweeps.yaml)
   # beta1:
   #   distribution: uniform
