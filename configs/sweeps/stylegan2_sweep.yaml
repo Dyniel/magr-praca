@@ -1,0 +1,94 @@
+# WandB Sweep Configuration for StyleGAN2
+
+program: scripts/train.py # Path to your training script
+
+method: bayes # Bayesian optimization
+
+metric:
+  name: "val/FID_Score" # Primary metric to optimize. Ensure Trainer logs this.
+                        # Or use "val/Loss_G" or other relevant metric.
+  goal: minimize
+
+# Early termination configuration (optional, but recommended for long sweeps)
+# early_terminate:
+#   type: hyperband
+#   min_iter: 10 # Minimum number of epochs/iterations before a run can be stopped.
+#   # s: 2 # Number of brackets. Adjust based on total resources.
+
+parameters:
+  # --- Command structure to use base_for_sweeps.yaml ---
+  # This tells wandb agent how to construct the command.
+  # It will call: python scripts/train.py --config_file configs/sweeps/base_for_sweeps.yaml model.architecture=stylegan2 g_lr=...
+  # This relies on OmegaConf's ability to merge a base YAML with dot-list overrides.
+  # The `train.py` script loads the --config_file, then OmegaConf applies CLI overrides.
+
+  # --- Fixed parameters for this sweep series ---
+  model.architecture:
+    value: "stylegan2"
+
+  # --- Hyperparameters to Tune ---
+  g_lr:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-3
+
+  d_lr:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-3
+
+  # Adam betas (can be tuned if desired, or kept fixed from base_for_sweeps.yaml)
+  # beta1:
+  #   distribution: uniform
+  #   min: 0.0
+  #   max: 0.5
+  # beta2:
+  #   distribution: uniform
+  #   min: 0.9
+  #   max: 0.999
+
+  r1_gamma:
+    distribution: uniform
+    min: 0.1 # R1 gamma can be sensitive. For StyleGAN2, often 1-10.
+    max: 20.0
+
+  model.stylegan2_channel_multiplier:
+    values: [1, 2] # Affects model size significantly
+
+  model.stylegan2_n_mlp:
+    values: [4, 6, 8] # Depth of the mapping network
+
+  # model.stylegan2_z_dim: # Usually fixed, but could be tuned
+  #   values: [256, 512]
+  # model.stylegan2_w_dim: # Usually fixed, but could be tuned
+  #   values: [256, 512]
+
+  # Optional: Tune batch_size if resources allow.
+  # batch_size:
+  #   values: [2, 4, 8] # Be mindful of GPU memory
+
+  # Optional: Tune superpixel conditioning for StyleGAN2
+  # model.use_superpixel_conditioning:
+  #   values: [True, False] # If True, enable specific conditioning types below
+  # model.stylegan2_g_spatial_cond: # Only effective if use_superpixel_conditioning is True
+  #   values: [True, False]
+  # model.stylegan2_d_spatial_cond: # Only effective if use_superpixel_conditioning is True
+  #   values: [True, False]
+  # model.stylegan2_g_latent_cond: # Only effective if use_superpixel_conditioning is True
+  #   values: [True, False]
+  # model.superpixel_latent_encoder_enabled: # Only effective if g_latent_cond is True
+  #   values: [True, False]
+
+
+# Command template for the agent to run.
+# `${env}` sets up environment variables (like WANDB_API_KEY).
+# `${interpreter}` is usually `python`.
+# `${program}` is `scripts/train.py`.
+# `${args}` are the hyperparameter overrides like `g_lr=0.001 model.architecture=stylegan2 ...`.
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - "--config_file"
+  - "configs/sweeps/base_for_sweeps.yaml" # Base settings for the sweep runs
+  - ${args}
