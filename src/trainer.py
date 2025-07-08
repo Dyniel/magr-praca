@@ -32,6 +32,7 @@ class Trainer:
             self.device = torch.device("cpu")
         else:
             self.device = torch.device(config.device)
+
         print(f"Using device: {self.device}")
 
         self.model_architecture = config.model.architecture
@@ -130,6 +131,7 @@ class Trainer:
             self.D.parameters(),
             lr=self.config.optimizer.d_lr, # Updated path
             betas=(self.config.optimizer.beta1, self.config.optimizer.beta2) # Updated path
+
         )
         print("Optimizers initialized.")
 
@@ -140,6 +142,7 @@ class Trainer:
         # r1_gamma is now expected to be a top-level parameter in BaseConfig,
         # as sweeps are setting it directly.
         self.r1_gamma = self.config.r1_gamma
+
 
         if self.model_architecture in ["gan5_gcn", "gan6_gat_cnn", "dcgan"]:
             # Standard GAN losses (non-saturating or LSGAN, etc.)
@@ -154,6 +157,7 @@ class Trainer:
                 F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
             # self.r1_gamma is set from top-level config. If model-specific r1 is needed, logic would change.
             # Example: self.r1_gamma = self.config.model.stylegan2_r1_gamma if hasattr(self.config.model, 'stylegan2_r1_gamma') else self.config.r1_gamma
+
         elif self.model_architecture == "stylegan3":
             self.loss_fn_g_stylegan3 = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
             self.loss_fn_d_stylegan3 = lambda d_real_logits, d_fake_logits: \
@@ -175,12 +179,14 @@ class Trainer:
 
     def train(self):
         print(f"Starting training for {self.config.num_epochs} epochs...") # Use self.config.num_epochs
+
         train_dataloader = get_dataloader(self.config, data_split="train", shuffle=True, drop_last=True)
         if train_dataloader is None:
             print("No training dataloader found. Exiting.")
             return
 
         for epoch in range(self.current_epoch, self.config.num_epochs): # Use self.config.num_epochs
+
             self.current_epoch = epoch
             self.G.train()
             self.D.train()
@@ -384,11 +390,13 @@ class Trainer:
             # More granular checkpointing moved into the batch loop to save at specified frequency
             # if epoch % self.config.checkpoint_freq_epoch == 0:
             #    self.save_checkpoint(epoch=self.current_epoch) # Example: save at end of epoch if it's a checkpoint epoch
+
             print(f"Epoch {epoch+1} completed.")
             # Potentially save checkpoint at end of epoch
 
         print("Training finished.")
         if self.config.use_wandb: # Check use_wandb
+
             wandb.finish()
 
     def _evaluate_on_split(self, data_split: str):
