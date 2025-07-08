@@ -1,0 +1,106 @@
+# Base configuration settings for WandB sweeps.
+# Sweep-specific YAMLs will load this and then override/add parameters.
+
+# --- System and Paths ---
+project_name: "SuperpixelGAN_Sweeps" # WandB project for all sweeps
+# output_dir_base: "experiment_outputs_sweeps" # Optional: separate output for sweeps
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc" # CHECK THIS PATH
+cache_dir: "superpixel_cache_sweeps"
+num_workers: 2 # Reduce for sweeps if I/O is not bottleneck
+device: "cuda"
+seed: null # Allow WandB to set different seeds for different runs in a sweep
+
+# --- Data and Preprocessing ---
+image_size: 256 # Keep consistent with your target, or reduce if necessary for faster sweeps
+num_superpixels: 150 # Global default, model-specific may override
+slic_compactness: 10.0
+debug_num_images: 0 # Use a reasonable subset for faster sweeps, e.g., 1000, or 0 for full dataset if feasible
+
+# --- Training Hyperparameters ---
+# batch_size will be set by individual sweep configs if tuned, otherwise a default here
+batch_size: 4 # Smaller batch size for sweeps to conserve memory / run faster
+num_epochs: 50 # Reduced epochs for sweeps. Adjust as needed.
+# g_lr, d_lr, beta1, beta2, r1_gamma will be tuned by the sweep typically.
+# Defaults for non-tuned optimizer params:
+beta1: 0.0
+beta2: 0.99
+r1_gamma: 5.0 # Default, can be tuned
+d_updates_per_g_update: 1 # Often set to 1 for sweeps for speed, can be tuned
+gradient_accumulation_steps: 1
+
+# --- Logging and Evaluation ---
+use_wandb: True # Essential for sweeps
+log_freq_step: 200 # Log less frequently during sweeps
+sample_freq_epoch: 10 # Generate samples less often, or disable (0)
+num_samples_to_log: 4
+checkpoint_freq_epoch: 0 # Disable checkpointing for sweeps unless specifically needed
+enable_fid_calculation: True # Enable FID if it's the primary metric
+fid_num_images: 1000 # Reduced number for faster FID during sweeps
+fid_batch_size: 8
+fid_freq_epoch: 25 # FID less frequently
+
+# --- Model settings that are NOT tuned in this sweep file ---
+# Specific model architecture params will be in the sweep file (e.g., model.architecture)
+# or taken from base_config.py defaults if not overridden by sweep.
+
+# --- Default Model Config (can be overridden by sweep params) ---
+# It's often cleaner to let the sweep define model architecture and its params.
+# However, some base model params might be set here if they are fixed across sweeps for an arch.
+# For example, if `z_dim` is fixed for all stylegan2 sweeps:
+# model:
+#   z_dim: 256 # This is a general z_dim, stylegan2 uses model.stylegan2_z_dim
+
+# Ensure that the sweep YAMLs specify `model.architecture`
+# and other necessary fixed model parameters if not tuning them.
+# The `scripts/train.py` will load `configs.base_config.BaseConfig` first,
+# then this `base_for_sweeps.yaml` (if specified via an extended syntax in wandb sweep command),
+# and then the command line args from the sweep agent.
+# A simpler way: `scripts/train.py` just takes dot-list overrides.
+# The sweep agent provides these. `scripts/train.py` should have its own
+# default config file (e.g. `experiment_config.yaml`) or use `BaseConfig` defaults.
+# This `base_for_sweeps.yaml` is more of a reference for what settings to use
+# when running sweeps, either by pointing train.py to it or by ensuring sweep
+# parameters cover these aspects.
+
+# For the current `scripts/train.py` which takes `--config_file`, this
+# `base_for_sweeps.yaml` could be passed as that config_file argument
+# by the sweep agent if the agent command is structured like:
+# program: scripts/train.py
+# command:
+#   - ${env}
+#   - python
+#   - ${program}
+#   - "--config_file"
+#   - "configs/sweeps/base_for_sweeps.yaml" # Pass this base
+#   - ${args} # Sweep parameters as dot-list overrides
+# This way, this file sets the defaults for the sweep runs.
+
+# Default model section (can be sparse, sweep params will fill it)
+model:
+  # Superpixel conditioning settings - can be tuned or fixed for a sweep series
+  use_superpixel_conditioning: False
+  superpixel_latent_encoder_enabled: False
+  # Defaults for conditioning params if enabled by a sweep
+  superpixel_spatial_map_channels_g: 1
+  superpixel_spatial_map_channels_d: 1
+  superpixel_feature_dim: 3
+  superpixel_latent_encoder_hidden_dims: [64, 128]
+  superpixel_latent_embedding_dim: 128
+  # Specific model conditioning flags (e.g., model.stylegan2_g_spatial_cond)
+  # would be set to False here by default, and sweep can try to turn them True.
+  dcgan_g_spatial_cond: False
+  dcgan_g_latent_cond: False
+  dcgan_d_spatial_cond: False
+  stylegan2_g_spatial_cond: False
+  stylegan2_g_latent_cond: False
+  stylegan2_d_spatial_cond: False
+  stylegan3_g_spatial_cond: False
+  stylegan3_g_latent_cond: False
+  stylegan3_d_spatial_cond: False
+  projectedgan_d_spatial_cond: False
+  # For projected GAN, G conditioning is via stylegan2 flags, so covered above.
+  # gan5/gan6 specific ablation flags
+  gan5_gcn_disable_gcn_blocks: False
+  gan6_gat_cnn_use_null_graph_embedding: False
+  projectedgan_feature_matching_loss_weight: 10.0 # Example default, can be tuned
+  projectedgan_feature_extractor_name: "resnet50"
