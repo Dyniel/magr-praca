@@ -26,7 +26,13 @@ from src.utils import (
 class Trainer:
     def __init__(self, config):
         self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() and config.use_cuda else "cpu")
+        # Updated device selection logic
+        if config.device == "cuda" and not torch.cuda.is_available():
+            print("CUDA specified in config but not available. Falling back to CPU.")
+            self.device = torch.device("cpu")
+        else:
+            self.device = torch.device(config.device)
+
         print(f"Using device: {self.device}")
 
         self.model_architecture = config.model.architecture
@@ -118,62 +124,69 @@ class Trainer:
 
         self.optimizer_G = optim.Adam(
             g_params,
-            lr=self.config.optimizer.g_lr,
-            betas=(self.config.optimizer.g_beta1, self.config.optimizer.g_beta2)
+            lr=self.config.optimizer.g_lr, # Updated path
+            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2) # Updated path
         )
         self.optimizer_D = optim.Adam(
             self.D.parameters(),
-            lr=self.config.optimizer.d_lr,
-            betas=(self.config.optimizer.d_beta1, self.config.optimizer.d_beta2)
+            lr=self.config.optimizer.d_lr, # Updated path
+            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2) # Updated path
+
         )
         print("Optimizers initialized.")
 
     def _init_loss_functions(self):
         # Define loss functions based on model architecture or config
         # This is a simplified example. Specific GANs have specific loss formulations.
+
+        # r1_gamma is now expected to be a top-level parameter in BaseConfig,
+        # as sweeps are setting it directly.
+        self.r1_gamma = self.config.r1_gamma
+
+
         if self.model_architecture in ["gan5_gcn", "gan6_gat_cnn", "dcgan"]:
             # Standard GAN losses (non-saturating or LSGAN, etc.)
             self.loss_fn_g = lambda d_fake_logits: F.binary_cross_entropy_with_logits(d_fake_logits, torch.ones_like(d_fake_logits))
             self.loss_fn_d = lambda d_real_logits, d_fake_logits: \
                 F.binary_cross_entropy_with_logits(d_real_logits, torch.ones_like(d_real_logits)) + \
                 F.binary_cross_entropy_with_logits(d_fake_logits, torch.zeros_like(d_fake_logits))
-            self.r1_gamma = self.config.get('r1_gamma', 10.0) # Default R1 gamma
+            # self.r1_gamma is already set from top-level config
         elif self.model_architecture == "stylegan2":
-            # StyleGAN2 typically uses non-saturating loss for G and logistic loss + R1 for D
             self.loss_fn_g_stylegan2 = lambda d_fake_logits: F.softplus(-d_fake_logits).mean() # Non-saturating
             self.loss_fn_d_stylegan2 = lambda d_real_logits, d_fake_logits: \
                 F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
-            self.r1_gamma = self.config.model.stylegan2_r1_gamma
+            # self.r1_gamma is set from top-level config. If model-specific r1 is needed, logic would change.
+            # Example: self.r1_gamma = self.config.model.stylegan2_r1_gamma if hasattr(self.config.model, 'stylegan2_r1_gamma') else self.config.r1_gamma
+
         elif self.model_architecture == "stylegan3":
             self.loss_fn_g_stylegan3 = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
             self.loss_fn_d_stylegan3 = lambda d_real_logits, d_fake_logits: \
                 F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
-            self.r1_gamma = self.config.model.stylegan3_r1_gamma
+            # self.r1_gamma from top-level
         elif self.model_architecture == "projected_gan":
-            # Projected GAN often uses non-saturating G loss, hinge D loss, or other variants
-            # Adversarial part
             self.loss_fn_g_adv_projected = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
             self.loss_fn_d_adv_projected = lambda d_real_logits, d_fake_logits: \
                  F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean() # Or hinge
-            # Feature matching loss (L2 or L1)
-            self.loss_fn_g_feat_match = nn.MSELoss() # Or nn.L1Loss()
-            self.r1_gamma = self.config.model.projectedgan_r1_gamma
+            self.loss_fn_g_feat_match = nn.MSELoss()
+            # self.r1_gamma from top-level
         else:
-            # Fallback (should be specified)
             self.loss_fn_g = None
             self.loss_fn_d = None
-            self.r1_gamma = 0
-        print("Loss functions initialized (placeholders, may need architecture-specifics).")
+            # self.r1_gamma will use the value from top-level config, or its default if not overridden by sweep.
+
+        print(f"Loss functions initialized. R1 Gamma set to: {self.r1_gamma}")
 
 
     def train(self):
-        print(f"Starting training for {self.config.training.epochs} epochs...")
+        print(f"Starting training for {self.config.num_epochs} epochs...") # Use self.config.num_epochs
+
         train_dataloader = get_dataloader(self.config, data_split="train", shuffle=True, drop_last=True)
         if train_dataloader is None:
             print("No training dataloader found. Exiting.")
             return
 
-        for epoch in range(self.current_epoch, self.config.training.epochs):
+        for epoch in range(self.current_epoch, self.config.num_epochs): # Use self.config.num_epochs
+
             self.current_epoch = epoch
             self.G.train()
             self.D.train()
@@ -357,24 +370,33 @@ class Trainer:
 
 
                 # Logging
-                if self.current_iteration % self.config.logging.log_freq == 0:
+                if self.current_iteration % self.config.log_freq_step == 0: # Use self.config.log_freq_step
                     batch_iterator.set_postfix(logs)
-                    if self.config.logging.wandb_project:
+                    if self.config.use_wandb: # Check use_wandb
                         wandb.log(logs, step=self.current_iteration)
 
                 # Evaluation and Checkpointing
-                if self.current_iteration % self.config.training.eval_freq == 0:
-                    eval_metrics = self._evaluate_on_split("val") # Assuming "val" split for evaluation
-                    if self.config.logging.wandb_project and eval_metrics:
+                if self.current_iteration % self.config.sample_freq_epoch == 0: # This seems like eval_freq based on old config structure
+                                                                           # Let's assume sample_freq_epoch implies eval too for now
+                    eval_metrics = self._evaluate_on_split("val")
+                    if self.config.use_wandb and eval_metrics: # Check use_wandb
                         wandb.log(eval_metrics, step=self.current_iteration)
-                    # Add checkpointing logic here if needed: self.save_checkpoint()
+
+                    if epoch % self.config.checkpoint_freq_epoch == 0 and batch_idx == len(train_dataloader) -1 : # Save at end of specified epochs
+                        self.save_checkpoint(epoch=self.current_epoch, is_best=False)
+
 
             # End of epoch
+            # More granular checkpointing moved into the batch loop to save at specified frequency
+            # if epoch % self.config.checkpoint_freq_epoch == 0:
+            #    self.save_checkpoint(epoch=self.current_epoch) # Example: save at end of epoch if it's a checkpoint epoch
+
             print(f"Epoch {epoch+1} completed.")
             # Potentially save checkpoint at end of epoch
 
         print("Training finished.")
-        if self.config.logging.wandb_project:
+        if self.config.use_wandb: # Check use_wandb
+
             wandb.finish()
 
     def _evaluate_on_split(self, data_split: str):
