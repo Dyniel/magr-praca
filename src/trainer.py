@@ -219,6 +219,11 @@ class Trainer:
             # Corrected: self.config.num_epochs instead of self.config.training.epochs
             batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{self.config.num_epochs}")
             for batch_idx, raw_batch_data in enumerate(batch_iterator):
+                if raw_batch_data is None:
+                    print(f"Warning: Trainer received a None batch from dataloader at training iteration {self.current_iteration} (epoch {epoch+1}, batch_idx {batch_idx}). Skipping batch.")
+                    self.current_iteration +=1 # Still increment iteration if you want to count skipped batches
+                    continue
+
                 self.current_iteration +=1
                 logs = {}
 
@@ -460,7 +465,11 @@ class Trainer:
         num_batches = 0
 
         with torch.no_grad():
-            for raw_batch_data in tqdm(eval_dataloader, desc=f"Evaluating {data_split}"):
+            for batch_idx, raw_batch_data in enumerate(tqdm(eval_dataloader, desc=f"Evaluating {data_split}")):
+                if raw_batch_data is None:
+                    print(f"Warning: Trainer received a None batch from dataloader during {data_split} evaluation (batch_idx {batch_idx}). Skipping batch.")
+                    continue
+
                 # Initialize batch losses/metrics to tensor(0.0) on correct device
                 lossD_batch = torch.tensor(0.0, device=self.device)
                 lossG_batch = torch.tensor(0.0, device=self.device)
