@@ -42,23 +42,29 @@ model:
 # --- Training Hyperparameters ---
 batch_size: 8 # Reduced batch size from BaseConfig default
 num_epochs: 250 # Increased epochs from BaseConfig default
-g_lr: 1e-5 # Lower generator learning rate
-d_lr: 1e-4 # Lower discriminator learning rate
-beta1: 0.0
-beta2: 0.99
+optimizer:
+  g_lr: 1e-5 # Lower generator learning rate
+  d_lr: 1e-4 # Lower discriminator learning rate
+  beta1: 0.0
+  beta2: 0.99
 r1_gamma: 5.0
 d_updates_per_g_update: 2
 gradient_accumulation_steps: 1 # Increase to trade computation for memory (effective_batch_size = batch_size * grad_accum_steps)
 
 # --- Logging and Evaluation ---
-use_wandb: True
-# wandb_project_name: "MyCustomWandBProject" # Override if needed
-# wandb_run_name: "MyAmazingExperimentRun" # Override if needed
-log_freq_step: 50
-sample_freq_epoch: 1
-num_samples_to_log: 8
-checkpoint_freq_epoch: 5
+logging:
+  use_wandb: True
+  # wandb_project_name: "MyCustomWandBProject" # Override if needed, else defaults to project_name
+  # wandb_run_name: "MyAmazingExperimentRun" # Override if needed, else defaults to run_name
+  # wandb_entity: "your_wandb_entity_here" # IMPORTANT: Set your W&B entity
+  wandb_watch_freq_g: 1000 # Default, can override
+  wandb_watch_freq_d: 1000 # Default, can override
+  log_freq_step: 50
+  sample_freq_epoch: 1
+  num_samples_to_log: 8
+  checkpoint_freq_epoch: 5
 
+# FID calculation parameters remain top-level as per BaseConfig structure
 enable_fid_calculation: True
 fid_num_images: 50000
 fid_batch_size: 32

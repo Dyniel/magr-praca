@@ -58,10 +58,29 @@ class Trainer:
             # For simplicity, assuming self.imagenet_norm will be defined or handled if needed.
             # self.imagenet_norm = ...
 
-        if self.config.logging.wandb_project:
-            wandb.init(project=self.config.logging.wandb_project, entity=self.config.logging.wandb_entity, config=OmegaConf.to_container(config, resolve=True))
-            wandb.watch(self.G, log="all", log_freq=config.logging.wandb_watch_freq_g)
-            wandb.watch(self.D, log="all", log_freq=config.logging.wandb_watch_freq_d)
+        # WandB initialization using the new logging config structure
+        if hasattr(self.config, 'logging') and self.config.logging.use_wandb and self.config.logging.wandb_project_name:
+            wandb.init(
+                project=self.config.logging.wandb_project_name,
+                entity=self.config.logging.wandb_entity,
+                name=self.config.logging.wandb_run_name, # Use run_name from logging config
+                config=OmegaConf.to_container(config, resolve=True) # Log the whole config
+            )
+            # Check if G and D exist before watching
+            if hasattr(self, 'G') and self.G is not None:
+                 wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
+            if hasattr(self, 'D') and self.D is not None:
+                 wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
+        elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback for old direct attributes if logging object is missing
+            print("Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
+            # This part is a fallback and ideally should not be triggered if config is correct
+            wandb.init(
+                project=getattr(self.config, 'wandb_project_name', 'default_project'),
+                name=getattr(self.config, 'wandb_run_name', 'default_run'),
+                config=OmegaConf.to_container(config, resolve=True)
+            )
+            if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all") # log_freq might be missing
+            if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
 
 
     def _init_models(self):
@@ -193,7 +212,8 @@ class Trainer:
             if self.E: self.E.train()
             if self.sp_latent_encoder: self.sp_latent_encoder.train()
 
-            batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{self.config.training.epochs}")
+            # Corrected: self.config.num_epochs instead of self.config.training.epochs
+            batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{self.config.num_epochs}")
             for batch_idx, raw_batch_data in enumerate(batch_iterator):
                 self.current_iteration +=1
                 logs = {}
@@ -303,8 +323,9 @@ class Trainer:
 
 
                 # --- Train Generator ---
-                # Potentially less frequent G updates (config.training.g_steps_per_d_step)
-                if self.current_iteration % self.config.training.g_steps_per_d_step == 0:
+                # Potentially less frequent G updates
+                # Corrected: self.config.d_updates_per_g_update instead of self.config.training.g_steps_per_d_step
+                if self.current_iteration % self.config.d_updates_per_g_update == 0:
                     toggle_grad(self.G, True)
                     if self.E: toggle_grad(self.E, True)
                     if self.sp_latent_encoder: toggle_grad(self.sp_latent_encoder, True)
@@ -370,33 +391,42 @@ class Trainer:
 
 
                 # Logging
-                if self.current_iteration % self.config.log_freq_step == 0: # Use self.config.log_freq_step
+                # Corrected: Check for logging attribute and use self.config.logging.*
+                if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.log_freq_step == 0:
                     batch_iterator.set_postfix(logs)
-                    if self.config.use_wandb: # Check use_wandb
+                    if self.config.logging.use_wandb:
                         wandb.log(logs, step=self.current_iteration)
+                elif self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0: # Fallback
+                    batch_iterator.set_postfix(logs)
+                    if getattr(self.config, 'use_wandb', False):
+                         wandb.log(logs, step=self.current_iteration)
+
 
                 # Evaluation and Checkpointing
-                if self.current_iteration % self.config.sample_freq_epoch == 0: # This seems like eval_freq based on old config structure
-                                                                           # Let's assume sample_freq_epoch implies eval too for now
+                # Corrected: Check for logging attribute and use self.config.logging.*
+                if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.sample_freq_epoch == 0:
                     eval_metrics = self._evaluate_on_split("val")
-                    if self.config.use_wandb and eval_metrics: # Check use_wandb
+                    if self.config.logging.use_wandb and eval_metrics:
                         wandb.log(eval_metrics, step=self.current_iteration)
 
-                    if epoch % self.config.checkpoint_freq_epoch == 0 and batch_idx == len(train_dataloader) -1 : # Save at end of specified epochs
+                    if epoch % self.config.logging.checkpoint_freq_epoch == 0 and batch_idx == len(train_dataloader) -1 :
+                        self.save_checkpoint(epoch=self.current_epoch, is_best=False)
+                elif self.current_iteration % getattr(self.config, 'sample_freq_epoch', 1) == 0: # Fallback
+                    eval_metrics = self._evaluate_on_split("val")
+                    if getattr(self.config, 'use_wandb', False) and eval_metrics:
+                        wandb.log(eval_metrics, step=self.current_iteration)
+                    if epoch % getattr(self.config, 'checkpoint_freq_epoch', 10) == 0 and batch_idx == len(train_dataloader) -1 :
                         self.save_checkpoint(epoch=self.current_epoch, is_best=False)
 
 
             # End of epoch
-            # More granular checkpointing moved into the batch loop to save at specified frequency
-            # if epoch % self.config.checkpoint_freq_epoch == 0:
-            #    self.save_checkpoint(epoch=self.current_epoch) # Example: save at end of epoch if it's a checkpoint epoch
-
             print(f"Epoch {epoch+1} completed.")
-            # Potentially save checkpoint at end of epoch
 
         print("Training finished.")
-        if self.config.use_wandb: # Check use_wandb
-
+        # Corrected: Check for logging attribute and use self.config.logging.use_wandb
+        if hasattr(self.config, 'logging') and self.config.logging.use_wandb:
+            wandb.finish()
+        elif getattr(self.config, 'use_wandb', False): # Fallback
             wandb.finish()
 
     def _evaluate_on_split(self, data_split: str):
