@@ -1,0 +1,44 @@
+# Example Test: StyleGAN3 Unconditioned (Simplified Version)
+project_name: "GAN_Tests"
+run_name: "stylegan3_unconditioned_smoke_test"
+
+dataset_path: "/path/to/your/image/dataset" # <<<<<< IMPORTANT: CHANGE THIS
+cache_dir: "./cache_test_sg3_uncond"
+image_size: 64
+num_superpixels: 50 # Ignored
+num_workers: 0
+device: "cuda"
+debug_num_images: 8
+batch_size: 2 # StyleGAN3 can be memory intensive
+num_epochs: 1
+
+model:
+  architecture: "stylegan3"
+  use_superpixel_conditioning: false
+
+  # StyleGAN3 specific minimal params
+  stylegan3_z_dim: 256
+  stylegan3_w_dim: 256
+  stylegan3_n_mlp: 4
+  stylegan3_channel_multiplier: 1
+  stylegan3_fir_kernel: [1,3,3,1] # Default, ensure it's list
+
+optimizer:
+  g_lr: 1e-4
+  d_lr: 1e-4
+  beta1: 0.0
+  beta2: 0.99
+
+logging:
+  use_wandb: true
+  wandb_entity: "YOUR_WANDB_ENTITY" # <<<<<< IMPORTANT: CHANGE THIS
+  wandb_project_name: ${project_name}
+  wandb_run_name: ${run_name}
+  log_freq_step: 10
+  sample_freq_epoch: 1
+  num_samples_to_log: 4
+  checkpoint_freq_epoch: 1
+
+enable_fid_calculation: false
+resume_checkpoint_path: null
+output_dir_base: "experiment_outputs_tests"
