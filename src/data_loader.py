@@ -316,6 +316,7 @@ class ImageToGraphDataset(Dataset):
 
 
 def collate_graphs(batch):
+    print("DEBUG: collate_graphs CALLED!")
     if not PYG_AVAILABLE or PyGBatch is None:
         raise ImportError("PyTorch Geometric is required for collate_graphs.")
 
@@ -338,11 +339,21 @@ def collate_graphs(batch):
         stacked_images = torch.stack(real_images)
         # Ensure graph_data_objects is a list of Data, not tuple of lists etc.
         batched_graphs = PyGBatch.from_data_list(list(graph_data_objects))
+
+        # Explicitly check the type of batched_graphs
+        if not isinstance(batched_graphs, PyGBatch):
+            print(f"WARNING: collate_graphs - PyGBatch.from_data_list returned an unexpected type or None.")
+            print(f"  Expected type: {PyGBatch}, Actual type: {type(batched_graphs)}, Value: {batched_graphs}")
+            print(f"  Number of items attempted for batching: {len(graph_data_objects)}.")
+            if len(graph_data_objects) > 0:
+                print(f"  Type of first graph object in list: {type(graph_data_objects[0])}")
+            return None # Invalidate batch if graph batching failed or returned wrong type
+
         return stacked_images, batched_graphs
     except Exception as e:
         # This might happen if, despite filtering, some None or incompatible types slipped through,
-        # or if PyGBatch.from_data_list fails.
-        print(f"ERROR: collate_graphs - Failed to stack images or batch graphs: {e}. "
+        # or if PyGBatch.from_data_list fails with an exception.
+        print(f"ERROR: collate_graphs - Failed to stack images or batch graphs due to exception: {e}. "
               f"Number of items after filtering: {len(batch)}. "
               f"First item image type: {type(batch[0][0]) if batch and batch[0] else 'N/A'}, "
               f"First item graph type: {type(batch[0][1]) if batch and batch[0] else 'N/A'}")
@@ -350,6 +361,7 @@ def collate_graphs(batch):
 
 
 def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
+    print("DEBUG: src.data_loader module loaded and get_dataloader CALLED!")
     dataset_path = None
     if data_split == "train":
         dataset_path = config.dataset_path

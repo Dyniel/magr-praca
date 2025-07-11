@@ -57,8 +57,17 @@ def test_load(config_path, num_batches_to_test=5):
             print("Received a None batch from dataloader (collate_fn likely returned None).")
             continue
 
+        # Workaround for unexpected list type from DataLoader
+        if isinstance(batch, list) and len(batch) > 0:
+            print(f"  Batch type: list (workaround applied)")
+            images = batch[0] # Assume the first element is the images tensor
+            graphs = None # Assume graphs are missing or not in expected format
+            print(f"  Applying workaround: Extracted images tensor from list.")
+            print(f"  Image batch shape: {images.shape if images is not None and hasattr(images, 'shape') else 'N/A'}")
+            print(f"  Graphs component (assumed missing/None due to list format): {graphs}")
+
         # For SuperpixelDataset (gan5)
-        if isinstance(batch, dict):
+        elif isinstance(batch, dict):
             print(f"  Batch type: dict (expected for SuperpixelDataset)")
             print(
                 f"  Image batch shape: {batch['image'].shape if 'image' in batch and batch['image'] is not None else 'N/A'}")
@@ -69,7 +78,7 @@ def test_load(config_path, num_batches_to_test=5):
                 print(
                     f"  First image path in batch: {batch['path'][0] if isinstance(batch['path'], list) and batch['path'] else batch['path']}")
 
-        # For ImageToGraphDataset (gan6)
+        # For ImageToGraphDataset (gan6) - original expected path
         elif isinstance(batch, tuple) and len(batch) == 2:
             print(f"  Batch type: tuple (expected for ImageToGraphDataset)")
             images, graphs = batch
@@ -79,9 +88,9 @@ def test_load(config_path, num_batches_to_test=5):
                 print(f"  Number of graphs in batch: {graphs.num_graphs if hasattr(graphs, 'num_graphs') else 'N/A'}")
             else:
                 print("  Graphs batch component is None.")
-        else:
-            print(f"  Received batch of unexpected type: {type(batch)}")
-            print(f"  Batch content: {str(batch)[:500]}...")  # Print a snippet of the batch
+        else: # Fallback for other unexpected types or if batch is None and somehow not caught earlier
+            print(f"  Received batch of truly unexpected type or structure: {type(batch)}")
+            print(f"  Batch content: {str(batch)[:500]}...") # Print a snippet of the batch
 
     if batches_processed == 0 and num_batches_to_test > 0:
         print("\nNo batches were processed. The dataloader might be empty or failing early.")
