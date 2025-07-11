@@ -147,6 +147,7 @@ class Trainer:
             self.w_avg = None # For StyleGAN2 truncation if used
             if self.config.model.stylegan2_use_truncation: # HistoGAN might use truncation
                  pass # Placeholder for w_avg calculation/loading if needed
+
         else:
             raise ValueError(f"Unsupported model architecture: {self.model_architecture}")
 
@@ -229,6 +230,7 @@ class Trainer:
                 value_range=self.config.model.histogan_image_value_range
             ).to(self.device)
             print(f"HistoGAN Histogram Loss initialized: bins={self.config.model.histogan_histogram_bins}, type={self.config.model.histogan_histogram_loss_type}")
+
         else:
             self.loss_fn_g_adv = None # Generic name for primary G adversarial loss
             self.loss_fn_d_adv = None # Generic name for primary D adversarial loss
