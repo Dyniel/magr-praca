@@ -1,0 +1,63 @@
+# Example Test: StyleGAN2 with ADA
+project_name: "GAN_Tests"
+run_name: "stylegan2_ada_smoke_test"
+
+dataset_path: "/path/to/your/image/dataset" # <<<<<< IMPORTANT: CHANGE THIS
+cache_dir: "./cache_test_sg2_ada"
+image_size: 64
+num_superpixels: 50 # Ignored
+num_workers: 0
+device: "cuda"
+debug_num_images: 16 # ADA might need a few more iterations to show p_aug changes
+batch_size: 2
+num_epochs: 2 # Run for 2 epochs to see if p_aug updates
+
+model:
+  architecture: "stylegan2"
+  use_superpixel_conditioning: false
+
+  # StyleGAN2 specific minimal params
+  stylegan2_z_dim: 256
+  stylegan2_w_dim: 256
+  stylegan2_n_mlp: 4
+  stylegan2_channel_multiplier: 1
+
+  # ADA parameters
+  stylegan2_ada_target_metric_val: 0.6 # Target for r_t (simplified as D_real_logits mean)
+  stylegan2_ada_interval_kimg: 1 # Update p_aug frequently for testing (e.g., every 1*batch_size*iter/1000 kimg)
+                                  # For a batch_size of 2, and 8 iterations per epoch (16 images / 2 batch_size),
+                                  # 1 kimg = 1000 images / 2 = 500 iterations.
+                                  # Let's make interval_kimg very small for testing, e.g. 0.01kimg = 10 images
+                                  # stylegan2_ada_interval_kimg * 1000 / batch_size = num_iters_for_update
+                                  # e.g. target 16 images for update: 0.016 kimg.
+                                  # The trainer logic is (iter * bs) % (interval_kimg * 1000) < bs
+                                  # So for interval_kimg = 1, update is every 1000/bs iterations.
+                                  # For this test, let's set it so it updates a few times.
+                                  # Total images = 16 (debug_num) * 2 (epochs) = 32 images.
+                                  # Let interval be such that it triggers, e.g. every 8 images (0.008 kimg)
+  stylegan2_ada_interval_kimg: 0.008 # Update approx every 8 images
+  stylegan2_ada_p_aug_initial: 0.0
+  stylegan2_ada_p_aug_step: 0.05 # Larger step for faster visible change in test
+  stylegan2_ada_metric_mode: "rt"
+  stylegan2_ada_augment_pipeline: ["xflip", "brightness", "contrast"]
+
+
+optimizer:
+  g_lr: 1e-4
+  d_lr: 1e-4
+  beta1: 0.0
+  beta2: 0.99
+
+logging:
+  use_wandb: true
+  wandb_entity: "YOUR_WANDB_ENTITY" # <<<<<< IMPORTANT: CHANGE THIS
+  wandb_project_name: ${project_name}
+  wandb_run_name: ${run_name}
+  log_freq_step: 2 # Log more frequently to see ADA metric
+  sample_freq_epoch: 1
+  num_samples_to_log: 4
+  checkpoint_freq_epoch: 1
+
+enable_fid_calculation: false
+resume_checkpoint_path: null
+output_dir_base: "experiment_outputs_tests"
