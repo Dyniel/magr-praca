@@ -44,7 +44,7 @@ class DCGANGenerator(nn.Module):
         # Determine initial nz for the first ConvTranspose2d
         # config.model.z_dim is the dimension of the original noise vector
         # If latent conditioning is enabled, nz = z_dim + superpixel_latent_embedding_dim
-        initial_nz = self.config_model.z_dim
+        initial_nz = self.config_model.dcgan_z_dim # Changed z_dim to dcgan_z_dim
         if self.config_model.dcgan_g_latent_cond:
             initial_nz += self.config_model.superpixel_latent_embedding_dim
 
@@ -140,7 +140,7 @@ class DCGANGenerator(nn.Module):
         # graph_batch, real_images, segments_map, adj_matrix are for other GAN types, ignored by standard DCGAN G.
         # New args for superpixel conditioning: spatial_map_g, z_superpixel_g
 
-        current_z_dim = self.config_model.z_dim
+        current_z_dim = self.config_model.dcgan_z_dim # Changed z_dim to dcgan_z_dim
 
         # C2: Latent Conditioning
         if self.config_model.dcgan_g_latent_cond and z_superpixel_g is not None:
