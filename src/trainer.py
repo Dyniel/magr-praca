@@ -311,9 +311,13 @@ class Trainer:
 
 
                 if self.model_architecture == "gan6_gat_cnn":
-                    z_dim_to_use = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
+                    # gan6_gat_cnn has a special "gan6_z_dim_noise" if E is also used, otherwise uses its main z_dim.
+                    # For simplicity, and assuming gan6_z_dim is the primary one if no E or specific noise dim.
+                    # This specific model might need more nuanced z_dim handling if its structure is complex.
+                    # Let's assume for now it has "gan6_z_dim" defined in ModelConfig.
+                    z_dim_to_use = getattr(self.config.model, "gan6_z_dim_noise", getattr(self.config.model, f"{self.model_architecture}_z_dim"))
                 else:
-                    z_dim_to_use = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
+                    z_dim_to_use = getattr(self.config.model, f"{self.model_architecture}_z_dim")
 
                 z_noise = torch.randn(current_batch_size, z_dim_to_use, device=self.device)
 
@@ -377,9 +381,10 @@ class Trainer:
                     self.optimizer_G.zero_grad()
 
                     if self.model_architecture == "gan6_gat_cnn":
-                        z_dim_to_use_g = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
+                        # Consistent handling for gan6_gat_cnn as above
+                        z_dim_to_use_g = getattr(self.config.model, "gan6_z_dim_noise", getattr(self.config.model, f"{self.model_architecture}_z_dim"))
                     else:
-                        z_dim_to_use_g = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
+                        z_dim_to_use_g = getattr(self.config.model, f"{self.model_architecture}_z_dim")
                     z_noise_g = torch.randn(current_batch_size, z_dim_to_use_g, device=self.device)
 
                     g_args_g = [z_noise_g]
@@ -628,9 +633,10 @@ class Trainer:
                     d_real_logits = self.D(eval_real_images_gan_norm, spatial_map_d=eval_spatial_map_d)
 
                 if self.model_architecture == "gan6_gat_cnn":
-                    z_dim_to_use_eval = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
+                    # Consistent handling for gan6_gat_cnn as in train method
+                    z_dim_to_use_eval = getattr(self.config.model, "gan6_z_dim_noise", getattr(self.config.model, f"{self.model_architecture}_z_dim"))
                 else:
-                    z_dim_to_use_eval = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
+                    z_dim_to_use_eval = getattr(self.config.model, f"{self.model_architecture}_z_dim")
                 z_noise = torch.randn(current_batch_size, z_dim_to_use_eval, device=self.device)
 
 
