@@ -24,22 +24,41 @@ from src.utils import (
 
 
 class Trainer:
-    def __init__(self, config):
-        self.config = config
-        # Updated device selection logic
-        if config.device == "cuda" and not torch.cuda.is_available():
+    def __init__(self, config): # Parameter name changed back to config
+        # Log the OmegaConf object passed as 'config'
+        if hasattr(config, 'logging') and config.logging.use_wandb and config.logging.wandb_project_name:
+            wandb.init(
+                project=config.logging.wandb_project_name,
+                entity=config.logging.wandb_entity,
+                name=config.logging.wandb_run_name,
+                config=OmegaConf.to_container(config, resolve=True) # Log the original OmegaConf
+            )
+        elif hasattr(config, 'use_wandb') and config.use_wandb: # Fallback
+            print("Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
+            wandb.init(
+                project=getattr(config, 'wandb_project_name', 'default_project'),
+                name=getattr(config, 'wandb_run_name', 'default_run'),
+                config=OmegaConf.to_container(config, resolve=True)
+            )
+
+        # Convert the incoming OmegaConf 'config' object to the actual BaseConfig dataclass instance for internal use
+        # This instance will be stored in self.config, shadowing the parameter name, which is fine.
+        self.config = OmegaConf.to_object(config)
+
+        # Updated device selection logic using the dataclass instance self.config
+        if self.config.device == "cuda" and not torch.cuda.is_available():
             print("CUDA specified in config but not available. Falling back to CPU.")
             self.device = torch.device("cpu")
         else:
-            self.device = torch.device(config.device)
+            self.device = torch.device(self.config.device)
 
         print(f"Using device: {self.device}")
 
-        self.model_architecture = config.model.architecture
+        self.model_architecture = self.config.model.architecture
         self.current_epoch = 0
         self.current_iteration = 0
 
-        # Initialize models, optimizers, loss functions based on config
+        # Initialize models, optimizers, loss functions based on self.config (which is now BaseConfig instance)
         self._init_models()
         self._init_optimizers()
         self._init_loss_functions()
@@ -47,40 +66,22 @@ class Trainer:
         # For ProjectedGAN feature matching
         if self.model_architecture == "projected_gan":
             self.feature_extractor = FeatureExtractor(
-                model_name=config.model.projectedgan_feature_extractor_model,
-                layers_to_extract=config.model.projectedgan_feature_extractor_layers, # This needs to be a dict in config
+                model_name=self.config.model.projectedgan_feature_extractor_model,
+                layers_to_extract=self.config.model.projectedgan_feature_extractor_layers,
                 pretrained=True,
                 requires_grad=False
             ).to(self.device).eval()
-            # Normalization for images passed to feature_extractor
-            # This typically uses ImageNet mean and std.
-            # Example: transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            # For simplicity, assuming self.imagenet_norm will be defined or handled if needed.
             # self.imagenet_norm = ...
 
-        # WandB initialization using the new logging config structure
+        # WandB watch calls (moved after G and D are initialized in _init_models)
         if hasattr(self.config, 'logging') and self.config.logging.use_wandb and self.config.logging.wandb_project_name:
-            wandb.init(
-                project=self.config.logging.wandb_project_name,
-                entity=self.config.logging.wandb_entity,
-                name=self.config.logging.wandb_run_name, # Use run_name from logging config
-                config=OmegaConf.to_container(config, resolve=True) # Log the whole config
-            )
-            # Check if G and D exist before watching
             if hasattr(self, 'G') and self.G is not None:
                  wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
             if hasattr(self, 'D') and self.D is not None:
                  wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
-        elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback for old direct attributes if logging object is missing
-            print("Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
-            # This part is a fallback and ideally should not be triggered if config is correct
-            wandb.init(
-                project=getattr(self.config, 'wandb_project_name', 'default_project'),
-                name=getattr(self.config, 'wandb_run_name', 'default_run'),
-                config=OmegaConf.to_container(config, resolve=True)
-            )
-            if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all") # log_freq might be missing
-            if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
+        elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback
+             if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all")
+             if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
 
 
     def _init_models(self):

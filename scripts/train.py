@@ -52,16 +52,12 @@ def main():
         print(f"Could not print final config as YAML: {e}")
 
     # Convert OmegaConf to the actual BaseConfig dataclass instance
-    try:
-        actual_config_object = OmegaConf.to_object(conf)
-    except Exception as e:
-        print(f"Error converting OmegaConf to BaseConfig object: {e}")
-        print("The Trainer will receive the OmegaConf object directly. Ensure it's compatible.")
-        actual_config_object = conf
+    # actual_config_object = OmegaConf.to_object(conf) # Trainer will handle conversion if needed
 
         # --- Trainer Initialization and Training ---
     try:
-        trainer_instance = Trainer(config=actual_config_object)
+        # Pass the OmegaConf object `conf` directly to the Trainer
+        trainer_instance = Trainer(config=conf)
         print("Trainer from 'src.trainer' initialized. Starting training process...")
         trainer_instance.train()
     except Exception as e:
