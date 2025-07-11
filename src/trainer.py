@@ -3,39 +3,42 @@ import torch.optim as optim
 import torch.nn.functional as F
 from tqdm import tqdm
 import torch.nn as nn
-import wandb # Assuming wandb is used for logging, can be made optional
+import wandb  # Assuming wandb is used for logging, can be made optional
 
 # Project specific imports - these might need adjustment based on actual file structure and names
 from src.models import (
-    Generator as GAN5Generator, Discriminator as GAN5Discriminator, # gan5_gcn
-    GraphEncoderGAT, GeneratorCNN as GAN6Generator, DiscriminatorCNN as GAN6Discriminator, # gan6_gat_cnn
+    Generator as GAN5Generator, Discriminator as GAN5Discriminator,  # gan5_gcn
+    GraphEncoderGAT, GeneratorCNN as GAN6Generator, DiscriminatorCNN as GAN6Discriminator,  # gan6_gat_cnn
     DCGANGenerator, DCGANDiscriminator,
     StyleGAN2Generator, StyleGAN2Discriminator,
-    StyleGAN3Generator, StyleGAN3Discriminator, # Assuming these exist
-    ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor, # Assuming these exist
+    StyleGAN3Generator, StyleGAN3Discriminator,  # Assuming these exist
+    ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor,  # Assuming these exist
     SuperpixelLatentEncoder
 )
 from src.data_loader import get_dataloader
 from src.utils import (
     denormalize_image, generate_spatial_superpixel_map, calculate_mean_superpixel_features,
-    toggle_grad, compute_grad_penalty # R1 gradient penalty
+    toggle_grad, compute_grad_penalty  # R1 gradient penalty
 )
+
+
 # Add other necessary loss functions or utilities
 # from src.losses import generator_loss_nonsaturating, discriminator_loss_r1, ...
 
 
 class Trainer:
-    def __init__(self, config): # Parameter name changed back to config
+    def __init__(self, config):  # Parameter name changed back to config
         # Log the OmegaConf object passed as 'config'
         if hasattr(config, 'logging') and config.logging.use_wandb and config.logging.wandb_project_name:
             wandb.init(
                 project=config.logging.wandb_project_name,
                 entity=config.logging.wandb_entity,
                 name=config.logging.wandb_run_name,
-                config=OmegaConf.to_container(config, resolve=True) # Log the original OmegaConf
+                config=OmegaConf.to_container(config, resolve=True)  # Log the original OmegaConf
             )
-        elif hasattr(config, 'use_wandb') and config.use_wandb: # Fallback
-            print("Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
+        elif hasattr(config, 'use_wandb') and config.use_wandb:  # Fallback
+            print(
+                "Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
             wandb.init(
                 project=getattr(config, 'wandb_project_name', 'default_project'),
                 name=getattr(config, 'wandb_run_name', 'default_run'),
@@ -77,22 +80,21 @@ class Trainer:
         # WandB watch calls (moved after G and D are initialized in _init_models)
         # Only call wandb.watch if wandb.init was successful (i.e., wandb.run is not None)
         if wandb.run is not None:
-            if hasattr(self.config, 'logging'): # Check if logging config exists
+            if hasattr(self.config, 'logging'):  # Check if logging config exists
                 if hasattr(self, 'G') and self.G is not None:
                     wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
                 if hasattr(self, 'D') and self.D is not None:
                     wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
-            elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback for older config structure
-                 if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all")
-                 if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
-
+            elif hasattr(self.config, 'use_wandb') and self.config.use_wandb:  # Fallback for older config structure
+                if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all")
+                if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
 
     def _init_models(self):
         # Generator and Discriminator
         if self.model_architecture == "gan5_gcn":
             self.G = GAN5Generator(self.config).to(self.device)
             self.D = GAN5Discriminator(self.config).to(self.device)
-            self.E = None # gan5_gcn doesn't use a separate E model in this structure
+            self.E = None  # gan5_gcn doesn't use a separate E model in this structure
         elif self.model_architecture == "gan6_gat_cnn":
             self.G = GAN6Generator(self.config).to(self.device)
             self.D = GAN6Discriminator(self.config).to(self.device)
@@ -114,6 +116,7 @@ class Trainer:
             self.E = None
         elif self.model_architecture == "projected_gan":
             self.G = ProjectedGANGenerator(self.config).to(self.device)
+
             self.D = ProjectedGANDiscriminator(self.config).to(self.device)
             self.E = None
         else:
@@ -121,9 +124,10 @@ class Trainer:
 
         self.sp_latent_encoder = None
         if self.config.model.use_superpixel_conditioning and \
-           getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False):
+                getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False):
             self.sp_latent_encoder = SuperpixelLatentEncoder(
                 input_feature_dim=self.config.model.superpixel_feature_dim,
+
                 hidden_dims=self.config.model.superpixel_latent_encoder_hidden_dims,
                 output_embedding_dim=self.config.model.superpixel_latent_embedding_dim,
                 num_superpixels=self.config.num_superpixels
@@ -133,7 +137,6 @@ class Trainer:
         print(f"G: {self.G.__class__.__name__}, D: {self.D.__class__.__name__}")
         if self.E: print(f"E: {self.E.__class__.__name__}")
         if self.sp_latent_encoder: print(f"SP_Encoder: {self.sp_latent_encoder.__class__.__name__}")
-
 
     def _init_optimizers(self):
         g_params = list(self.G.parameters())
@@ -149,6 +152,7 @@ class Trainer:
             self.D.parameters(),
             lr=self.config.optimizer.d_lr,
             betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
+
         )
         print("Optimizers initialized.")
 
@@ -157,11 +161,13 @@ class Trainer:
 
         if self.model_architecture in ["gan5_gcn", "gan6_gat_cnn", "dcgan"]:
             self.loss_fn_g = lambda d_fake_logits: F.binary_cross_entropy_with_logits(d_fake_logits, torch.ones_like(d_fake_logits))
+
             self.loss_fn_d = lambda d_real_logits, d_fake_logits: \
                 F.binary_cross_entropy_with_logits(d_real_logits, torch.ones_like(d_real_logits)) + \
                 F.binary_cross_entropy_with_logits(d_fake_logits, torch.zeros_like(d_fake_logits))
         elif self.model_architecture == "stylegan2":
             self.loss_fn_g_stylegan2 = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
+
             self.loss_fn_d_stylegan2 = lambda d_real_logits, d_fake_logits: \
                 F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
         elif self.model_architecture == "stylegan3":
@@ -172,6 +178,7 @@ class Trainer:
             self.loss_fn_g_adv_projected = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
             self.loss_fn_d_adv_projected = lambda d_real_logits, d_fake_logits: \
                  F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
+
             self.loss_fn_g_feat_match = nn.MSELoss()
         else:
             self.loss_fn_g = None
@@ -181,12 +188,14 @@ class Trainer:
     def train(self):
         print(f"Starting training for {self.config.num_epochs} epochs...")
 
+
         train_dataloader = get_dataloader(self.config, data_split="train", shuffle=True, drop_last=True)
         if train_dataloader is None:
             print("No training dataloader found. Exiting.")
             return
 
         for epoch in range(self.current_epoch, self.config.num_epochs):
+
 
             self.current_epoch = epoch
             self.G.train()
@@ -199,9 +208,10 @@ class Trainer:
                 if raw_batch_data is None:
                     print(f"Warning: Trainer received a None batch from dataloader at training iteration {self.current_iteration} (epoch {epoch+1}, batch_idx {batch_idx}). Skipping batch.")
                     self.current_iteration +=1
+
                     continue
 
-                self.current_iteration +=1
+                self.current_iteration += 1
                 logs = {}
 
                 real_images_gan_norm = None; segments_map = None; adj_matrix = None; graph_batch_pyg = None
@@ -223,6 +233,7 @@ class Trainer:
 
                 if real_images_gan_norm is None:
                     print(f"Warning: Could not extract real images for training batch (arch: {self.model_architecture}, type: {type(raw_batch_data)}). Skipping.")
+
                     continue
                 current_batch_size = real_images_gan_norm.size(0)
                 if current_batch_size == 0: continue
@@ -236,6 +247,7 @@ class Trainer:
                 if self.config.model.use_superpixel_conditioning and segments_map is not None and \
                    (g_spatial_active or d_spatial_active or g_latent_active):
                     real_images_01 = denormalize_image(real_images_gan_norm)
+
                     if g_spatial_active:
                         spatial_map_g = generate_spatial_superpixel_map(
                             segments_map, self.config.model.superpixel_spatial_map_channels_g,
@@ -249,10 +261,12 @@ class Trainer:
                         spatial_map_d = generate_spatial_superpixel_map(
                             segments_map, self.config.model.superpixel_spatial_map_channels_d,
                             self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
+
                     if g_latent_active:
                         mean_sp_feats = calculate_mean_superpixel_features(
                             real_images_01, segments_map,
-                            self.sp_latent_encoder.num_superpixels, self.config.model.superpixel_feature_dim).to(self.device)
+                            self.sp_latent_encoder.num_superpixels, self.config.model.superpixel_feature_dim).to(
+                            self.device)
                         z_superpixel_g = self.sp_latent_encoder(mean_sp_feats)
 
                 toggle_grad(self.D, True)
@@ -268,6 +282,7 @@ class Trainer:
                     z_dim_to_use = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
                 else:
                     z_dim_to_use = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
+
                 z_noise = torch.randn(current_batch_size, z_dim_to_use, device=self.device)
 
                 g_args = [z_noise]
@@ -294,10 +309,12 @@ class Trainer:
                     g_kwargs['z_superpixel_g'] = z_superpixel_g
                     if self.model_architecture in ["stylegan2", "projected_gan"]: # Corrected: was model.config...
                         g_kwargs['style_mix_prob'] = getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9)
+
                         g_kwargs['truncation_psi'] = None
 
                 with torch.no_grad():
                     fake_images = self.G(*g_args, **g_kwargs)
+
 
                 if self.model_architecture == "gan6_gat_cnn":
                     d_fake_logits = self.D(fake_images.detach())
@@ -307,6 +324,7 @@ class Trainer:
                 if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
                     lossD = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
                 else:
+
                     lossD = self.loss_fn_d(d_real_logits, d_fake_logits)
                 logs["Loss_D_Adv"] = lossD.item()
 
@@ -319,6 +337,7 @@ class Trainer:
                 self.optimizer_D.step()
                 logs["Loss_D_Total"] = lossD.item()
                 toggle_grad(self.D, False)
+
 
                 if self.current_iteration % self.config.d_updates_per_g_update == 0:
                     toggle_grad(self.G, True)
@@ -348,6 +367,7 @@ class Trainer:
                             z_graph_g = torch.zeros(current_batch_size, z_graph_dim, device=self.device)
                         else:
                             print("INFO: gan6_gat_cnn - self.E is None (gan6_use_graph_encoder=False), creating zero z_graph_g for G's input (G_train step).")
+
                             z_graph_dim = self.config.model.gan6_z_dim_graph_encoder_output
                             z_graph_g = torch.zeros(current_batch_size, z_graph_dim, device=self.device)
                         g_args_g = [z_graph_g, current_batch_size]
@@ -357,11 +377,13 @@ class Trainer:
                         if self.model_architecture in ["stylegan2", "projected_gan"]: # Corrected: was model.config...
                              g_kwargs_g['style_mix_prob'] = getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9)
 
+
                     fake_images_for_g = self.G(*g_args_g, **g_kwargs_g)
                     if self.model_architecture == "gan6_gat_cnn":
                         d_fake_logits_for_g = self.D(fake_images_for_g)
                     else:
                         d_fake_logits_for_g = self.D(fake_images_for_g, spatial_map_d=spatial_map_d)
+
 
                     if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
                         lossG_adv = self.loss_fn_g_stylegan2(d_fake_logits_for_g)
@@ -390,6 +412,7 @@ class Trainer:
                     if self.E: toggle_grad(self.E, False)
                     if self.sp_latent_encoder: toggle_grad(self.sp_latent_encoder, False)
 
+
                 if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.log_freq_step == 0:
                     batch_iterator.set_postfix(logs)
                     if self.config.logging.use_wandb:
@@ -405,7 +428,9 @@ class Trainer:
                         if self.config.logging.use_wandb and eval_metrics:
                              wandb.log(eval_metrics, step=self.current_iteration)
 
-                    if epoch % self.config.logging.checkpoint_freq_epoch == 0 and batch_idx == len(train_dataloader) -1 :
+
+                    if epoch % self.config.logging.checkpoint_freq_epoch == 0 and batch_idx == len(
+                            train_dataloader) - 1:
                         self.save_checkpoint(epoch=self.current_epoch, is_best=False)
 
                 elif self.current_iteration % getattr(self.config, 'sample_freq_epoch', 100) == 0:
@@ -418,10 +443,12 @@ class Trainer:
 
             print(f"Epoch {epoch+1} completed.")
 
+
         print("Training finished.")
         if hasattr(self.config, 'logging') and self.config.logging.use_wandb:
             wandb.finish()
         elif getattr(self.config, 'use_wandb', False):
+
             wandb.finish()
 
     def _evaluate_on_split(self, data_split: str):
@@ -440,12 +467,14 @@ class Trainer:
         total_d_loss = 0.0; total_g_loss = 0.0; total_d_loss_adv = 0.0
         total_d_real_logits = 0.0; total_d_fake_logits = 0.0
         total_g_feat_match_loss = 0.0
+
         num_batches = 0
 
         with torch.no_grad():
             for batch_idx, raw_batch_data in enumerate(tqdm(eval_dataloader, desc=f"Evaluating {data_split}")):
                 if raw_batch_data is None:
-                    print(f"Warning: Trainer received a None batch from dataloader during {data_split} evaluation (batch_idx {batch_idx}). Skipping batch.")
+                    print(
+                        f"Warning: Trainer received a None batch from dataloader during {data_split} evaluation (batch_idx {batch_idx}). Skipping batch.")
                     continue
 
                 lossD_batch = torch.tensor(0.0, device=self.device); lossG_batch = torch.tensor(0.0, device=self.device)
@@ -460,6 +489,7 @@ class Trainer:
                     eval_real_images_gan_norm = raw_batch_data[0].to(self.device)
                     eval_graph_batch_pyg = None
                 elif isinstance(raw_batch_data, dict) and "image" in raw_batch_data:
+
                     eval_real_images_gan_norm = raw_batch_data["image"].to(self.device)
                     if "segments" in raw_batch_data: eval_segments_map = raw_batch_data["segments"].to(self.device)
                     if "adj" in raw_batch_data: eval_adj_matrix = raw_batch_data["adj"].to(self.device)
@@ -471,7 +501,8 @@ class Trainer:
                     eval_real_images_gan_norm = raw_batch_data.to(self.device)
 
                 if eval_real_images_gan_norm is None:
-                    print(f"Warning: Could not extract real images for eval batch in {data_split} for arch {self.model_architecture}. Skipping batch.")
+                    print(
+                        f"Warning: Could not extract real images for eval batch in {data_split} for arch {self.model_architecture}. Skipping batch.")
                     continue
                 current_batch_size = eval_real_images_gan_norm.size(0)
                 if current_batch_size == 0: continue
@@ -480,10 +511,10 @@ class Trainer:
                 g_spatial_active_eval = getattr(self.config.model, f"{self.model_architecture}_g_spatial_cond", False)
                 d_spatial_active_eval = getattr(self.config.model, f"{self.model_architecture}_d_spatial_cond", False)
                 g_latent_active_eval = self.sp_latent_encoder is not None and \
-                                  getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False)
+                                       getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False)
 
                 if self.config.model.use_superpixel_conditioning and eval_segments_map is not None and \
-                   (g_spatial_active_eval or d_spatial_active_eval or g_latent_active_eval):
+                        (g_spatial_active_eval or d_spatial_active_eval or g_latent_active_eval):
                     eval_real_images_01 = denormalize_image(eval_real_images_gan_norm)
                     if g_spatial_active_eval:
                         eval_spatial_map_g = generate_spatial_superpixel_map(
@@ -494,14 +525,17 @@ class Trainer:
                            eval_spatial_map_g is not None and eval_spatial_map_g.shape[-1] != 4:
                              eval_spatial_map_g = F.interpolate(eval_spatial_map_g, size=(4,4), mode='nearest')
                     if d_spatial_active_eval:
+
                         eval_spatial_map_d = generate_spatial_superpixel_map(
                             eval_segments_map, self.config.model.superpixel_spatial_map_channels_d,
                             self.config.image_size, self.config.num_superpixels, eval_real_images_01).to(self.device)
                     if g_latent_active_eval:
                         mean_sp_feats_eval = calculate_mean_superpixel_features(
                             eval_real_images_01, eval_segments_map,
-                            self.sp_latent_encoder.num_superpixels, self.config.model.superpixel_feature_dim).to(self.device)
+                            self.sp_latent_encoder.num_superpixels, self.config.model.superpixel_feature_dim).to(
+                            self.device)
                         eval_z_superpixel_g = self.sp_latent_encoder(mean_sp_feats_eval)
+
 
                 if self.model_architecture == "gan6_gat_cnn":
                     d_real_logits = self.D(eval_real_images_gan_norm)
@@ -514,11 +548,13 @@ class Trainer:
                     z_dim_to_use_eval = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
                 z_noise = torch.randn(current_batch_size, z_dim_to_use_eval, device=self.device)
 
+
                 g_args_eval = [z_noise]
                 g_kwargs_eval = {}
                 if self.model_architecture == "gan5_gcn":
                     g_args_eval.extend([eval_real_images_gan_norm, eval_segments_map, eval_adj_matrix])
                 elif self.model_architecture == "gan6_gat_cnn":
+
                     if eval_graph_batch_pyg is not None and self.E is not None:
                         z_graph_eval = self.E(eval_graph_batch_pyg)
                         if self.config.model.gan6_gat_cnn_use_null_graph_embedding and self.E:
@@ -531,6 +567,7 @@ class Trainer:
                         print(f"INFO: gan6_gat_cnn - self.E is None (gan6_use_graph_encoder=False), creating zero z_graph for G's input (eval {data_split} step).")
                         z_graph_dim_eval = self.config.model.gan6_z_dim_graph_encoder_output
                         z_graph_eval = torch.zeros(current_batch_size, z_graph_dim_eval, device=self.device)
+
                     g_args_eval = [z_graph_eval, current_batch_size]
 
                 elif self.model_architecture in ["dcgan", "stylegan2", "stylegan3", "projected_gan"]:
@@ -545,6 +582,7 @@ class Trainer:
 
                 fake_images = self.G(*g_args_eval, **g_kwargs_eval)
 
+
                 if self.model_architecture == "gan6_gat_cnn":
                     d_fake_logits = self.D(fake_images)
                 else:
@@ -554,6 +592,7 @@ class Trainer:
                     lossD_adv_batch = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
                     lossG_batch = self.loss_fn_g_stylegan2(d_fake_logits)
                 else:
+
                     lossD_adv_batch = self.loss_fn_d(d_real_logits, d_fake_logits)
                     lossG_batch = self.loss_fn_g(d_fake_logits)
 
@@ -566,7 +605,7 @@ class Trainer:
                     lossG_batch += self.config.model.projectedgan_feature_matching_loss_weight * lossG_feat_match_batch
                     total_g_feat_match_loss += lossG_feat_match_batch.item()
 
-                lossD_batch = lossD_adv_batch
+
                 d_real_logits_mean_batch = d_real_logits.mean()
                 d_fake_logits_mean_batch = d_fake_logits.mean()
 
@@ -578,6 +617,7 @@ class Trainer:
                 num_batches += 1
 
         self.G.train(); self.D.train()
+
         if self.E: self.E.train()
         if self.sp_latent_encoder: self.sp_latent_encoder.train()
 
@@ -591,6 +631,7 @@ class Trainer:
             f"{data_split}/D_Fake_Logits_Mean": total_d_fake_logits / num_batches,
         }
         if self.model_architecture == "projected_gan" and total_g_feat_match_loss > 0 :
+
             avg_metrics[f"{data_split}/Loss_G_FeatMatch"] = total_g_feat_match_loss / num_batches
 
         print(f"Evaluation results for {data_split}: {avg_metrics}")
@@ -602,6 +643,9 @@ class Trainer:
     def load_checkpoint(self, checkpoint_path):
         print(f"Checkpoint loading from {checkpoint_path} (placeholder).")
 
+
 from omegaconf import OmegaConf
 import os
 import shutil
+
+[end of src/trainer.py]
