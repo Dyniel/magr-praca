@@ -647,5 +647,3 @@ class Trainer:
 from omegaconf import OmegaConf
 import os
 import shutil
-
-[end of src/trainer.py]
