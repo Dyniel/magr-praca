@@ -93,6 +93,23 @@ class ModelConfig:
     # stylegan2_g_reg_every: int = 4 # How often to perform G path regularization (if implemented)
     # stylegan2_d_reg_every: int = 16 # How often to perform D R1 regularization
 
+    # StyleGAN2-ADA specific parameters
+    stylegan2_ada_target_metric_val: float = 0.6 # Target value for the chosen ADA metric (e.g., r_v, FID threshold)
+    stylegan2_ada_interval_kimg: int = 4       # How often to update p_aug (in kimg)
+    stylegan2_ada_kimg_target_ramp_up: int = 500 # Duration over which to ramp up p_aug towards initial_p_aug_target if metric is too low
+    stylegan2_ada_p_aug_initial: float = 0.0 # Initial augmentation probability
+    stylegan2_ada_p_aug_step: float = 0.005   # Step size for adjusting p_aug
+    stylegan2_ada_augment_pipeline: list[str] = field(default_factory=lambda: [
+        "brightness", "contrast", "lumaflip", "hue", "saturation", # color
+        "imgcrop", "geom", # geom
+        # "cutout" # Often separate
+    ])
+    # Individual augmentation probabilities (can be overridden in YAML)
+    # These are the 'xflip', 'rotate90', 'xint', 'xint_max' etc. from StyleGAN2-ADA paper.
+    # For simplicity here, we'll have a single p_aug and apply the selected pipeline.
+    # More granular control could be added later.
+    stylegan2_ada_metric_mode: str = "rt" # "rt" (sign of D output), "fid" (if FID is frequent enough)
+
     # --- Parameters for StyleGAN3 architecture (simplified) ---
     stylegan3_z_dim: int = 512
     stylegan3_w_dim: int = 512
@@ -157,6 +174,17 @@ class ModelConfig:
     projectedgan_feature_layers_to_extract: Optional[list[str]] = None # Layers from feature extractor, if None, model defaults used
     projectedgan_projection_dims: int = 256 # Example dim if D were to project features (not used in current D model)
     projectedgan_feature_matching_loss_weight: float = 10.0 # Weight for feature matching loss for G
+
+    # --- Parameters for CycleGAN architecture ---
+    cyclegan_input_nc: int = 3  # Number of channels in input images
+    cyclegan_output_nc: int = 3 # Number of channels in output images
+    cyclegan_ngf: int = 64      # Number of generator filters in the first conv layer
+    cyclegan_ndf: int = 64      # Number of discriminator filters in the first conv layer
+    cyclegan_n_blocks_gen: int = 9 # Number of residual blocks in CycleGAN generator
+    cyclegan_n_layers_disc: int = 3 # Number of layers in CycleGAN PatchGAN discriminator
+    cyclegan_lambda_cycle_a: float = 10.0 # Weight for cycle consistency loss (A -> B -> A)
+    cyclegan_lambda_cycle_b: float = 10.0 # Weight for cycle consistency loss (B -> A -> B)
+    cyclegan_lambda_identity: float = 0.5 # Weight for identity loss. If > 0, identity loss is used.
 
 
 @dataclass

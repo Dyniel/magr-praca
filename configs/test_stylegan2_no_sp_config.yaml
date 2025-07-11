@@ -1,0 +1,41 @@
+project_name: "TestRun"
+run_name: "stylegan2_no_superpixels_test"
+
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc" # Use an existing path from base_config
+cache_dir: "test_cache_delete_me" # Temporary cache
+num_workers: 0 # Easier for debugging
+device: "cpu" # Forcing CPU for this test to avoid CUDA issues if any
+
+image_size: 64 # Smaller image size for faster test
+num_superpixels: 50 # Will be ignored due to use_superpixel_conditioning=False, but good to have
+debug_num_images: 4
+batch_size: 2
+num_epochs: 1
+
+model:
+  architecture: "stylegan2"
+  use_superpixel_conditioning: False # Key for this test
+  # StyleGAN2 specific minimal params (defaults from base_config will be used if not specified)
+  stylegan2_z_dim: 256
+  stylegan2_w_dim: 256
+  stylegan2_n_mlp: 4
+  stylegan2_channel_multiplier: 1
+
+  # Disable all actual conditioning for this test, even if use_superpixel_conditioning were true
+  stylegan2_g_spatial_cond: False
+  stylegan2_g_latent_cond: False
+  stylegan2_d_spatial_cond: False
+  superpixel_latent_encoder_enabled: False
+
+
+optimizer:
+  g_lr: 1e-5
+  d_lr: 1e-5
+
+logging:
+  use_wandb: False
+  log_freq_step: 1
+  sample_freq_epoch: 1 # Irrelevant as epochs=1
+  checkpoint_freq_epoch: 1
+
+enable_fid_calculation: False

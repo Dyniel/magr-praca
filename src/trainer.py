@@ -15,6 +15,7 @@ from src.models import (
     ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor,  # Assuming these exist
     SuperpixelLatentEncoder
 )
+from src.augmentations import ADAManager # Import ADAManager
 from src.data_loader import get_dataloader
 from src.utils import (
     denormalize_image, generate_spatial_superpixel_map, calculate_mean_superpixel_features,
@@ -61,21 +62,29 @@ class Trainer:
         self.model_architecture = self.config.model.architecture
         self.current_epoch = 0
         self.current_iteration = 0
+        self.ada_manager = None # Initialize to None
 
         # Initialize models, optimizers, loss functions based on self.config (which is now BaseConfig instance)
-        self._init_models()
+        self._init_models() # This will also init self.ada_manager if applicable
         self._init_optimizers()
         self._init_loss_functions()
 
         # For ProjectedGAN feature matching
         if self.model_architecture == "projected_gan":
             self.feature_extractor = FeatureExtractor(
-                model_name=self.config.model.projectedgan_feature_extractor_model,
-                layers_to_extract=self.config.model.projectedgan_feature_extractor_layers,
+                model_name=self.config.model.projectedgan_feature_extractor_model, # Corrected: was projectedgan_feature_extractor_name
+                layers_to_extract=self.config.model.projectedgan_feature_layers_to_extract, # Corrected: was projectedgan_feature_extractor_layers
                 pretrained=True,
                 requires_grad=False
             ).to(self.device).eval()
             # self.imagenet_norm = ...
+
+        # Initialize ADAManager if StyleGAN2 and ADA is configured
+        if self.model_architecture == "stylegan2" and \
+           hasattr(self.config.model, 'stylegan2_ada_target_metric_val'): # Check for a key ADA param
+            print("Initializing ADAManager for StyleGAN2.")
+            self.ada_manager = ADAManager(self.config.model, self.device)
+
 
         # WandB watch calls (moved after G and D are initialized in _init_models)
         # Only call wandb.watch if wandb.init was successful (i.e., wandb.run is not None)
@@ -116,9 +125,27 @@ class Trainer:
             self.E = None
         elif self.model_architecture == "projected_gan":
             self.G = ProjectedGANGenerator(self.config).to(self.device)
-
             self.D = ProjectedGANDiscriminator(self.config).to(self.device)
             self.E = None
+        elif self.model_architecture == "cyclegan":
+            # For CycleGAN, G is G_A2B, E is G_B2A (repurposing E slot conceptually)
+            # D is D_A, and we'll need another D_B
+            self.G_A2B = CycleGANGenerator(input_nc=self.config.model.cyclegan_input_nc,
+                                           output_nc=self.config.model.cyclegan_output_nc,
+                                           ngf=self.config.model.cyclegan_ngf,
+                                           n_residual_blocks=self.config.model.cyclegan_n_blocks_gen).to(self.device)
+            self.G_B2A = CycleGANGenerator(input_nc=self.config.model.cyclegan_output_nc, # B to A
+                                           output_nc=self.config.model.cyclegan_input_nc,
+                                           ngf=self.config.model.cyclegan_ngf,
+                                           n_residual_blocks=self.config.model.cyclegan_n_blocks_gen).to(self.device)
+            self.D_A = CycleGANDiscriminator(input_nc=self.config.model.cyclegan_output_nc).to(self.device) # D_A discriminates real B and fake B (from G_A2B)
+            self.D_B = CycleGANDiscriminator(input_nc=self.config.model.cyclegan_input_nc).to(self.device) # D_B discriminates real A and fake A (from G_B2A)
+
+            # To fit the existing structure slightly, let's alias G_A2B to self.G for some logging/watch purposes if needed.
+            # However, training logic will refer to G_A2B and G_B2A directly.
+            self.G = self.G_A2B
+            self.D = self.D_A # Main D for watching, D_B is separate
+            self.E = self.G_B2A # Using E slot for G_B2A for watching if needed
         else:
             raise ValueError(f"Unsupported model architecture: {self.model_architecture}")
 
@@ -140,50 +167,64 @@ class Trainer:
 
     def _init_optimizers(self):
         g_params = list(self.G.parameters())
-        if self.E: g_params += list(self.E.parameters())
+        if self.E: g_params += list(self.E.parameters()) # For gan6 E or CycleGAN G_B2A
         if self.sp_latent_encoder: g_params += list(self.sp_latent_encoder.parameters())
 
-        self.optimizer_G = optim.Adam(
-            g_params,
-            lr=self.config.optimizer.g_lr,
-            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
-        )
-        self.optimizer_D = optim.Adam(
-            self.D.parameters(),
-            lr=self.config.optimizer.d_lr,
-            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
-
-        )
+        if self.model_architecture == "cyclegan":
+            self.optimizer_G_A2B = optim.Adam(self.G_A2B.parameters(), lr=self.config.optimizer.g_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
+            self.optimizer_G_B2A = optim.Adam(self.G_B2A.parameters(), lr=self.config.optimizer.g_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
+            self.optimizer_D_A = optim.Adam(self.D_A.parameters(), lr=self.config.optimizer.d_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
+            self.optimizer_D_B = optim.Adam(self.D_B.parameters(), lr=self.config.optimizer.d_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
+            # For compatibility with potential G logging, self.optimizer_G can point to one of them.
+            self.optimizer_G = self.optimizer_G_A2B
+            self.optimizer_D = self.optimizer_D_A
+        else:
+            self.optimizer_G = optim.Adam(
+                g_params,
+                lr=self.config.optimizer.g_lr,
+                betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
+            )
+            self.optimizer_D = optim.Adam(
+                self.D.parameters(), # Assumes self.D is the primary discriminator
+                lr=self.config.optimizer.d_lr,
+                betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
+            )
         print("Optimizers initialized.")
 
     def _init_loss_functions(self):
         self.r1_gamma = self.config.r1_gamma
 
         if self.model_architecture in ["gan5_gcn", "gan6_gat_cnn", "dcgan"]:
-            self.loss_fn_g = lambda d_fake_logits: F.binary_cross_entropy_with_logits(d_fake_logits, torch.ones_like(d_fake_logits))
-
-            self.loss_fn_d = lambda d_real_logits, d_fake_logits: \
+            self.loss_fn_g_adv = lambda d_fake_logits: F.binary_cross_entropy_with_logits(d_fake_logits, torch.ones_like(d_fake_logits))
+            self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
                 F.binary_cross_entropy_with_logits(d_real_logits, torch.ones_like(d_real_logits)) + \
                 F.binary_cross_entropy_with_logits(d_fake_logits, torch.zeros_like(d_fake_logits))
         elif self.model_architecture == "stylegan2":
-            self.loss_fn_g_stylegan2 = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
-
-            self.loss_fn_d_stylegan2 = lambda d_real_logits, d_fake_logits: \
+            self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
+            self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
                 F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
         elif self.model_architecture == "stylegan3":
-            self.loss_fn_g_stylegan3 = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
-            self.loss_fn_d_stylegan3 = lambda d_real_logits, d_fake_logits: \
+            self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
+            self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
                 F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
         elif self.model_architecture == "projected_gan":
-            self.loss_fn_g_adv_projected = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
-            self.loss_fn_d_adv_projected = lambda d_real_logits, d_fake_logits: \
+            self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
+            self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
                  F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
-
-            self.loss_fn_g_feat_match = nn.MSELoss()
+            self.loss_fn_g_feat_match = nn.MSELoss() # Specific to ProjectedGAN G loss
+        elif self.model_architecture == "cyclegan":
+            self.loss_fn_g_adv = nn.MSELoss() # CycleGAN typically uses MSE for adversarial loss against PatchGAN
+            self.loss_fn_d_adv = nn.MSELoss() # For D, target is 1.0 for real, 0.0 for fake (or vice-versa if logits are used differently)
+            self.loss_fn_cycle = nn.L1Loss()
+            self.loss_fn_identity = nn.L1Loss()
         else:
-            self.loss_fn_g = None
-            self.loss_fn_d = None
-        print(f"Loss functions initialized. R1 Gamma set to: {self.r1_gamma}")
+            self.loss_fn_g_adv = None # Generic name for primary G adversarial loss
+            self.loss_fn_d_adv = None # Generic name for primary D adversarial loss
+
+        print(f"Loss functions initialized. R1 Gamma set to: {self.r1_gamma if hasattr(self, 'r1_gamma') else 'N/A (not used by all models)'}")
+        if self.model_architecture == "cyclegan":
+            print(f"CycleGAN Lambdas: Cycle A/B={self.config.model.cyclegan_lambda_cycle_a}/{self.config.model.cyclegan_lambda_cycle_b}, Identity={self.config.model.cyclegan_lambda_identity}")
+
 
     def train(self):
         print(f"Starting training for {self.config.num_epochs} epochs...")
@@ -208,38 +249,158 @@ class Trainer:
                 if raw_batch_data is None:
                     print(f"Warning: Trainer received a None batch from dataloader at training iteration {self.current_iteration} (epoch {epoch+1}, batch_idx {batch_idx}). Skipping batch.")
                     self.current_iteration +=1
-
                     continue
 
                 self.current_iteration += 1
-                logs = {}
+                logs = {} # Initialize logs dict for each iteration
 
-                real_images_gan_norm = None; segments_map = None; adj_matrix = None; graph_batch_pyg = None
+                if self.model_architecture == "cyclegan":
+                    # CycleGAN specific training loop
+                    # Assumes data loader for CycleGAN yields a dict: {'A': real_A_tensor, 'B': real_B_tensor}
+                    if not isinstance(raw_batch_data, dict) or 'A' not in raw_batch_data or 'B' not in raw_batch_data:
+                        print(f"Warning: CycleGAN training step expected dict with 'A' and 'B' images, got {type(raw_batch_data)}. Skipping batch.")
+                        continue
 
-                if self.model_architecture == "gan6_gat_cnn" and isinstance(raw_batch_data, list) and len(raw_batch_data) > 0:
-                    print(f"INFO: Applying workaround for list-type batch in trainer (gan6_gat_cnn). Batch idx: {batch_idx}")
-                    real_images_gan_norm = raw_batch_data[0].to(self.device)
-                    graph_batch_pyg = None
-                elif isinstance(raw_batch_data, dict) and "image" in raw_batch_data:
-                    real_images_gan_norm = raw_batch_data["image"].to(self.device)
-                    if "segments" in raw_batch_data: segments_map = raw_batch_data["segments"].to(self.device)
-                    if "adj" in raw_batch_data: adj_matrix = raw_batch_data["adj"].to(self.device)
-                elif isinstance(raw_batch_data, tuple) and len(raw_batch_data) == 2:
-                    real_images_gan_norm, graph_batch_pyg = raw_batch_data
-                    real_images_gan_norm = real_images_gan_norm.to(self.device)
-                    graph_batch_pyg = graph_batch_pyg.to(self.device)
-                elif isinstance(raw_batch_data, torch.Tensor):
-                    real_images_gan_norm = raw_batch_data.to(self.device)
+                    real_A = raw_batch_data['A'].to(self.device)
+                    real_B = raw_batch_data['B'].to(self.device)
+                    current_batch_size = real_A.size(0)
 
-                if real_images_gan_norm is None:
-                    print(f"Warning: Could not extract real images for training batch (arch: {self.model_architecture}, type: {type(raw_batch_data)}). Skipping.")
+                    # Create dummy PatchGAN output for target shape (this is a common way)
+                    # Actual PatchGAN output shape depends on D's architecture and input image size
+                    # For now, let's assume a fixed dummy output shape for target_real/target_fake
+                    # A better way is to pass a real image through D once to get the shape.
+                    # Example: dummy_D_output_shape = self.D_A(real_B).shape
+                    # For simplicity, assuming D_A and D_B output [N, 1, H_patch, W_patch]
+                    # We need to get the actual output shape from one of the discriminators.
+                    # This must be done carefully as D might not be initialized fully if this is first iter.
+                    # Let's assume they are initialized and can take real_A/real_B.
 
-                    continue
-                current_batch_size = real_images_gan_norm.size(0)
-                if current_batch_size == 0: continue
+                    # Determine target shapes for adversarial losses
+                    # D_A discriminates domain B images, D_B discriminates domain A images
+                    # Target for real images is 1.0, for fake is 0.0
+                    # The shape of target_real/fake should match D's output shape.
+                    # We can get this by doing a forward pass.
+                    # To avoid issues if D_A/D_B are not fully ready on first pass (unlikely here but good practice):
+                    try:
+                        target_real_shape_A = self.D_A(self.G_A2B(real_A)).shape # D_A sees fake_B
+                        target_real_shape_B = self.D_B(self.G_B2A(real_B)).shape # D_B sees fake_A
+                    except Exception as e:
+                        print(f"Error getting target shapes from D_A/D_B for CycleGAN: {e}. Skipping batch.")
+                        continue
 
-                spatial_map_g, spatial_map_d, z_superpixel_g = None, None, None
-                g_spatial_active = getattr(self.config.model, f"{self.model_architecture}_g_spatial_cond", False)
+                    target_real_A = torch.ones(target_real_shape_A, device=self.device)
+                    target_fake_A = torch.zeros(target_real_shape_A, device=self.device)
+                    target_real_B = torch.ones(target_real_shape_B, device=self.device)
+                    target_fake_B = torch.zeros(target_real_shape_B, device=self.device)
+
+
+                    # --- Train Generators G_A2B and G_B2A ---
+                    toggle_grad(self.D_A, False); toggle_grad(self.D_B, False) # Ds require no grads when optimizing Gs
+                    self.G_A2B.train(); self.G_B2A.train()
+                    self.optimizer_G_A2B.zero_grad()
+                    self.optimizer_G_B2A.zero_grad() # Combined optimizer for Gs
+
+                    # Identity losses (optional)
+                    loss_identity_total = torch.tensor(0.0, device=self.device)
+                    if self.config.model.cyclegan_lambda_identity > 0:
+                        identity_B = self.G_A2B(real_B) # G_A2B(B) should be B
+                        loss_identity_B = self.loss_fn_identity(identity_B, real_B) * self.config.model.cyclegan_lambda_identity
+                        logs["Loss_G_Identity_B"] = loss_identity_B.item()
+
+                        identity_A = self.G_B2A(real_A) # G_B2A(A) should be A
+                        loss_identity_A = self.loss_fn_identity(identity_A, real_A) * self.config.model.cyclegan_lambda_identity
+                        logs["Loss_G_Identity_A"] = loss_identity_A.item()
+                        loss_identity_total = loss_identity_A + loss_identity_B
+
+                    # Adversarial losses for G_A2B (makes fake_B look real for D_A)
+                    fake_B = self.G_A2B(real_A)
+                    pred_fake_B_for_G = self.D_A(fake_B)
+                    loss_G_A2B_adv = self.loss_fn_g_adv(pred_fake_B_for_G, target_real_A)
+                    logs["Loss_G_A2B_Adv"] = loss_G_A2B_adv.item()
+
+                    # Adversarial losses for G_B2A (makes fake_A look real for D_B)
+                    fake_A = self.G_B2A(real_B)
+                    pred_fake_A_for_G = self.D_B(fake_A)
+                    loss_G_B2A_adv = self.loss_fn_g_adv(pred_fake_A_for_G, target_real_B)
+                    logs["Loss_G_B2A_Adv"] = loss_G_B2A_adv.item()
+
+                    # Cycle consistency losses
+                    reconstructed_A = self.G_B2A(fake_B) # real_A -> fake_B -> reconstructed_A
+                    loss_cycle_A = self.loss_fn_cycle(reconstructed_A, real_A) * self.config.model.cyclegan_lambda_cycle_a
+                    logs["Loss_G_Cycle_A"] = loss_cycle_A.item()
+
+                    reconstructed_B = self.G_A2B(fake_A) # real_B -> fake_A -> reconstructed_B
+                    loss_cycle_B = self.loss_fn_cycle(reconstructed_B, real_B) * self.config.model.cyclegan_lambda_cycle_b
+                    logs["Loss_G_Cycle_B"] = loss_cycle_B.item()
+
+                    # Total generator loss
+                    loss_G_total = loss_G_A2B_adv + loss_G_B2A_adv + loss_cycle_A + loss_cycle_B + loss_identity_total
+                    loss_G_total.backward()
+                    self.optimizer_G_A2B.step() # Step individual optimizers for Gs
+                    self.optimizer_G_B2A.step()
+                    logs["Loss_G_Total"] = loss_G_total.item()
+
+                    # --- Train Discriminator D_A (distinguishes real_B from fake_B) ---
+                    toggle_grad(self.D_A, True)
+                    self.D_A.train()
+                    self.optimizer_D_A.zero_grad()
+
+                    pred_real_B_for_D_A = self.D_A(real_B)
+                    loss_D_A_real = self.loss_fn_d_adv(pred_real_B_for_D_A, target_real_A)
+
+                    # Use fake_B from G_A2B, detach from G's graph
+                    # TODO: Consider using an image buffer for fake images to stabilize D training (ImagePool class)
+                    pred_fake_B_for_D_A = self.D_A(fake_B.detach())
+                    loss_D_A_fake = self.loss_fn_d_adv(pred_fake_B_for_D_A, target_fake_A)
+
+                    loss_D_A = (loss_D_A_real + loss_D_A_fake) * 0.5
+                    loss_D_A.backward()
+                    self.optimizer_D_A.step()
+                    logs["Loss_D_A"] = loss_D_A.item()
+
+                    # --- Train Discriminator D_B (distinguishes real_A from fake_A) ---
+                    toggle_grad(self.D_B, True)
+                    self.D_B.train()
+                    self.optimizer_D_B.zero_grad()
+
+                    pred_real_A_for_D_B = self.D_B(real_A)
+                    loss_D_B_real = self.loss_fn_d_adv(pred_real_A_for_D_B, target_real_B)
+
+                    pred_fake_A_for_D_B = self.D_B(fake_A.detach())
+                    loss_D_B_fake = self.loss_fn_d_adv(pred_fake_A_for_D_B, target_fake_B)
+
+                    loss_D_B = (loss_D_B_real + loss_D_B_fake) * 0.5
+                    loss_D_B.backward()
+                    self.optimizer_D_B.step()
+                    logs["Loss_D_B"] = loss_D_B.item()
+
+                else: # Original training loop for other GAN architectures
+                    real_images_gan_norm = None; segments_map = None; adj_matrix = None; graph_batch_pyg = None
+
+                    # Data loading for non-CycleGAN architectures
+                    if self.model_architecture == "gan6_gat_cnn" and isinstance(raw_batch_data, list) and len(raw_batch_data) > 0: # Workaround
+                        real_images_gan_norm = raw_batch_data[0].to(self.device)
+                        graph_batch_pyg = None
+                    elif isinstance(raw_batch_data, dict) and "image" in raw_batch_data: # SuperpixelDataset or ImageDataset
+                        real_images_gan_norm = raw_batch_data["image"].to(self.device)
+                        if "segments" in raw_batch_data: segments_map = raw_batch_data["segments"].to(self.device)
+                        if "adj" in raw_batch_data: adj_matrix = raw_batch_data["adj"].to(self.device)
+                    elif isinstance(raw_batch_data, tuple) and len(raw_batch_data) == 2: # ImageToGraphDataset
+                        real_images_gan_norm, graph_batch_pyg = raw_batch_data
+                        real_images_gan_norm = real_images_gan_norm.to(self.device)
+                        graph_batch_pyg = graph_batch_pyg.to(self.device)
+                    elif isinstance(raw_batch_data, torch.Tensor): # Fallback if ImageDataset returns just a tensor
+                        real_images_gan_norm = raw_batch_data.to(self.device)
+
+                    if real_images_gan_norm is None:
+                        print(f"Warning: Could not extract real images for training batch (arch: {self.model_architecture}, type: {type(raw_batch_data)}). Skipping.")
+                        continue
+                    current_batch_size = real_images_gan_norm.size(0)
+                    if current_batch_size == 0: continue
+
+                    # Superpixel conditioning data prep (for non-CycleGAN)
+                    spatial_map_g, spatial_map_d, z_superpixel_g = None, None, None
+                    g_spatial_active = getattr(self.config.model, f"{self.model_architecture}_g_spatial_cond", False)
                 d_spatial_active = getattr(self.config.model, f"{self.model_architecture}_d_spatial_cond", False)
                 g_latent_active = self.sp_latent_encoder is not None and \
                                   getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False)
@@ -273,10 +434,18 @@ class Trainer:
                 self.optimizer_D.zero_grad()
 
                 real_images_gan_norm.requires_grad = (self.r1_gamma > 0)
+
+                # Apply ADA if StyleGAN2 and ADA manager is active
+                d_input_real_images = real_images_gan_norm
+                if self.model_architecture == "stylegan2" and self.ada_manager:
+                    d_input_real_images = self.ada_manager.apply_augmentations(real_images_gan_norm)
+
                 if self.model_architecture == "gan6_gat_cnn":
-                    d_real_logits = self.D(real_images_gan_norm)
+                    d_real_logits = self.D(d_input_real_images) # gan6 D doesn't take spatial_map_d
                 else:
-                    d_real_logits = self.D(real_images_gan_norm, spatial_map_d=spatial_map_d)
+                    # For StyleGAN2, d_input_real_images might be augmented
+                    d_real_logits = self.D(d_input_real_images, spatial_map_d=spatial_map_d)
+
 
                 if self.model_architecture == "gan6_gat_cnn":
                     z_dim_to_use = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
@@ -415,31 +584,80 @@ class Trainer:
 
                 if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.log_freq_step == 0:
                     batch_iterator.set_postfix(logs)
-                    if self.config.logging.use_wandb:
+                    if self.config.logging.use_wandb and wandb.run:
                         wandb.log(logs, step=self.current_iteration)
-                elif self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0:
+                elif self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0: # Fallback for older config
                     batch_iterator.set_postfix(logs)
-                    if getattr(self.config, 'use_wandb', False):
+                    if getattr(self.config, 'use_wandb', False) and wandb.run:
                          wandb.log(logs, step=self.current_iteration)
 
-                if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.sample_freq_epoch == 0:
-                    if self.current_iteration % self.config.logging.log_freq_step == 0 :
-                        eval_metrics = self._evaluate_on_split("val")
-                        if self.config.logging.use_wandb and eval_metrics:
+                # ADA p_aug update logic
+                if self.model_architecture == "stylegan2" and self.ada_manager and \
+                   hasattr(self.config.model, 'stylegan2_ada_interval_kimg') and self.config.model.stylegan2_ada_interval_kimg > 0:
+
+                    # Calculate current kimg (thousands of images processed)
+                    # This assumes self.current_iteration is total steps and current_batch_size is constant.
+                    # A more robust way might be to sum images seen.
+                    # For simplicity:
+                    current_kimg = (self.current_iteration * self.config.batch_size) // 1000
+
+                    if self.current_iteration > 0 and \
+                       (self.current_iteration * self.config.batch_size) % \
+                       (self.config.model.stylegan2_ada_interval_kimg * 1000) < self.config.batch_size:
+                        # This condition tries to trigger once when current_kimg crosses an interval boundary.
+                        # It's a bit rough due to batch sizes. A dedicated kimg counter would be better.
+
+                        metric_for_ada = 0.0
+                        if self.ada_manager.ada_metric_mode == "rt":
+                            # Use the mean of real logits from the last D step as a proxy for r_t
+                            # This is a simplification. True r_t = E[sign(D(real_aug))].
+                            # We are using E[D(real_aug)] directly.
+                            metric_for_ada = d_real_logits.mean().item()
+                        elif self.ada_manager.ada_metric_mode == "fid":
+                            # FID calculation is expensive and usually not done this frequently.
+                            # This mode would require FID to be calculated here or fetched if done by another process.
+                            # For this implementation, we'll assume FID is not calculated here frequently enough.
+                            # So, "rt" mode is more practical with current structure.
+                            print("Warning: ADA metric mode 'fid' selected, but frequent FID calculation for ADA update is not implemented here. p_aug will not be updated based on FID.")
+                            pass # p_aug won't be updated if FID isn't available
+
+                        if self.ada_manager.ada_metric_mode == "rt": # Only update if metric was available
+                            self.ada_manager.update_p_aug(metric_for_ada, current_kimg)
+                            if self.config.logging.use_wandb and wandb.run:
+                                self.ada_manager.log_status(wandb.log) # Log p_aug to wandb
+                                wandb.log({"ada/rt_metric_val": metric_for_ada}, step=self.current_iteration)
+
+                        print(f"ADA Update at iteration {self.current_iteration} (kimg ~{current_kimg}): p_aug = {self.ada_manager.get_p_aug():.4f}, metric_val ({self.ada_manager.ada_metric_mode}) = {metric_for_ada:.4f}")
+
+
+                # Logging samples, validation, and checkpoints
+                # This logic seems a bit duplicated, consolidating for clarity
+                log_samples_this_iter = False
+                if hasattr(self.config, 'logging'):
+                    if self.config.logging.sample_freq_epoch > 0 and \
+                       self.current_iteration > 0 and \
+                       (self.current_iteration * self.config.batch_size) % \
+                       (self.config.logging.sample_freq_epoch * len(train_dataloader.dataset)) < self.config.batch_size:
+                        log_samples_this_iter = True
+                elif getattr(self.config, 'sample_freq_epoch', 0) > 0: # Fallback
+                     if self.current_iteration > 0 and \
+                       (self.current_iteration * self.config.batch_size) % \
+                       (getattr(self.config, 'sample_freq_epoch', 1) * len(train_dataloader.dataset)) < self.config.batch_size:
+                        log_samples_this_iter = True
+
+                if log_samples_this_iter:
+                    if (hasattr(self.config, 'logging') and self.config.logging.use_wandb and wandb.run) or \
+                       (getattr(self.config, 'use_wandb', False) and wandb.run):
+                        eval_metrics = self._evaluate_on_split("val") # Also logs samples within _evaluate_on_split
+                        if eval_metrics: # eval_metrics can be {} if dataloader is None
                              wandb.log(eval_metrics, step=self.current_iteration)
 
+                # Checkpointing (end of epoch based)
+                is_last_batch_of_epoch = (batch_idx == len(train_dataloader) - 1)
+                checkpoint_freq = getattr(self.config.logging, 'checkpoint_freq_epoch', getattr(self.config, 'checkpoint_freq_epoch', 10))
+                if is_last_batch_of_epoch and (epoch + 1) % checkpoint_freq == 0:
+                    self.save_checkpoint(epoch=self.current_epoch, is_best=False)
 
-                    if epoch % self.config.logging.checkpoint_freq_epoch == 0 and batch_idx == len(
-                            train_dataloader) - 1:
-                        self.save_checkpoint(epoch=self.current_epoch, is_best=False)
-
-                elif self.current_iteration % getattr(self.config, 'sample_freq_epoch', 100) == 0:
-                    if self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0:
-                        eval_metrics = self._evaluate_on_split("val")
-                        if getattr(self.config, 'use_wandb', False) and eval_metrics:
-                            wandb.log(eval_metrics, step=self.current_iteration)
-                    if epoch % getattr(self.config, 'checkpoint_freq_epoch', 10) == 0 and batch_idx == len(train_dataloader) -1 :
-                        self.save_checkpoint(epoch=self.current_epoch, is_best=False)
 
             print(f"Epoch {epoch+1} completed.")
 
