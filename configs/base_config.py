@@ -162,6 +162,7 @@ class ModelConfig:
     histogan_image_value_range: tuple[float, float] = field(default_factory=lambda: (-1.0, 1.0))
 
 
+
 @dataclass
 class BaseConfig:
     # --- System and Paths ---
