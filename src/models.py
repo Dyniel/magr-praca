@@ -134,142 +134,78 @@ class DCGANGenerator(nn.Module):
                 self.main.add_module("tanh_out_32", nn.Tanh())
 
 
-    def forward(self, z_noise, graph_batch=None, real_images=None, segments_map=None, adj_matrix=None):
+    def forward(self, z_noise, graph_batch=None, real_images=None, segments_map=None, adj_matrix=None, spatial_map_g=None, z_superpixel_g=None): # MODIFIED SIGNATURE
         # graph_batch, real_images, segments_map, adj_matrix are ignored by standard DCGAN
         # z_noise is expected to be of shape [batch_size, z_dim, 1, 1] for ConvTranspose2d
-        # graph_batch, real_images, segments_map, adj_matrix are for other GAN types, ignored by standard DCGAN G.
-        # New args for superpixel conditioning: spatial_map_g, z_superpixel_g
 
-        current_z_dim = self.config_model.dcgan_z_dim # Changed z_dim to dcgan_z_dim
+        # current_z_dim = self.config_model.dcgan_z_dim # This variable is not used, can be removed
 
         # C2: Latent Conditioning
         if self.config_model.dcgan_g_latent_cond and z_superpixel_g is not None:
-            # z_noise: [B, z_dim_orig], z_superpixel_g: [B, z_sp_embed_dim]
-            # Ensure z_noise is 2D for this concatenation
             if z_noise.ndim == 4 and z_noise.shape[2]==1 and z_noise.shape[3]==1:
                 z_noise = z_noise.squeeze(-1).squeeze(-1)
             elif z_noise.ndim != 2:
                 raise ValueError(f"DCGAN G: z_noise has unexpected shape {z_noise.shape} for latent conditioning.")
 
-            z_noise = torch.cat([z_noise, z_superpixel_g], dim=1)
-            # The first ConvTranspose2d's in_channels (nz) in __init__ must have been set to z_dim_orig + z_sp_embed_dim
-            # This requires dynamic layer creation or passing the combined dim to __init__.
-            # For now, assuming the 'nz' in __init__ was configured to be this combined dimension if latent_cond is true.
-            # This is a bit tricky because layer sizes are fixed at init.
-            # A cleaner way: modify the self.main[0] (the first ConvTranspose2d) input channels here if this flag is true.
-            # This is complex to do post-init without re-creating layers.
-            # Let's assume __init__ handles the nz based on config.
-            # The self.config_model.z_dim used in __init__ for nz should be the *combined* dimension if latent_cond=True.
-            # The Trainer will need to ensure z_noise passed to G has the original z_dim, and z_superpixel_g is separate.
-            # The G's z_dim in config should represent the noise part only.
-            pass # z_noise is now combined
+            # Ensure z_superpixel_g is also 2D
+            if z_superpixel_g.ndim != 2:
+                raise ValueError(f"DCGAN G: z_superpixel_g has unexpected shape {z_superpixel_g.shape} for latent conditioning, expected [B, embed_dim].")
 
+
+            z_noise = torch.cat([z_noise, z_superpixel_g], dim=1)
+            # The first ConvTranspose2d's in_channels (initial_nz) in __init__ must have been set to
+            # dcgan_z_dim + superpixel_latent_embedding_dim for this to work.
+            # This is handled by the __init__ logic.
+
+        # Ensure z_noise is 4D before passing to the main network
         if z_noise.ndim == 2:
             z_noise = z_noise.unsqueeze(-1).unsqueeze(-1) # Reshape to [B, combined_z_dim, 1, 1]
 
-        # Initial processing by the main sequential model
-        x = self.main[0](z_noise) # Pass through the first ConvTranspose2d: nz -> ngf*8, 4x4
+        # --- Handling of spatial_map_g (C1 conditioning) ---
+        # The original code had a complex structure for C1.
+        # It implied that self.main would be different if C1 was active.
+        # For DCGAN, C1 (spatial conditioning) typically means concatenating the spatial map
+        # to the feature maps at some layer. The __init__ logic for DCGANGenerator has been updated
+        # to adjust channel sizes in self.main if dcgan_g_spatial_cond is true.
+        # Specifically, it adjusts channels after the first ConvTranspose2d.
+        # So, if C1 is active, self.main is already built to expect a concatenated feature map
+        # after its first block.
 
-        # C1: Spatial Conditioning (applied after first layer's output, at 4x4)
+        # The forward pass needs to implement this concatenation logic if C1 is active.
+        # The current self.main is a nn.Sequential. We need to break it apart if C1 is active.
+
         if self.config_model.dcgan_g_spatial_cond and spatial_map_g is not None:
+            # Pass z_noise through the first layer block (ConvTranspose2d, BatchNorm, ReLU)
+            # self.main[0] is ConvTranspose2d(initial_nz, ngf * 8, 4, 1, 0, bias=False)
+            # self.main[1] is BatchNorm2d(ngf * 8 or ngf * 8 + spatial_channels_g)
+            # self.main[2] is ReLU(True)
+
+            x = self.main[0](z_noise) # Output: [B, ngf*8, 4, 4]
+
+            # Concatenate spatial_map_g
             # spatial_map_g should be [B, C_sp_map, 4, 4]
-            # x is [B, ngf*8, 4, 4]
             if x.shape[2:] != spatial_map_g.shape[2:]:
-                # Resize spatial_map_g to match x's spatial dimensions (e.g., 4x4)
-                # This should ideally be done in Trainer or data prep to ensure correct size.
-                # For now, let's assume it's passed with correct H,W for this stage.
-                # If not, add interpolate here. This is a simplification.
-                # For DCGAN, if G starts at 4x4, spatial_map_g should be 4x4.
-                # Example: spatial_map_g = F.interpolate(spatial_map_g, size=x.shape[2:], mode='nearest')
+                # This check was present before, good to keep.
+                # For DCGAN, if G's first feature map is 4x4, spatial_map_g should be 4x4.
+                # The trainer code has logic to interpolate spatial_map_g to (4,4) if its channels > 0.
                 raise ValueError(f"DCGAN G: spatial_map_g shape {spatial_map_g.shape} "
-                                 f"does not match feature map shape {x.shape} for spatial conditioning.")
+                                 f"does not match feature map shape {x.shape} for spatial conditioning at 4x4 stage.")
 
-            x = torch.cat([x, spatial_map_g], dim=1)
-            # The next layer self.main[1] (BatchNorm2d) and self.main[2] (ReLU) operate on this.
-            # The subsequent ConvTranspose2d (self.main[3]) must have its in_channels adjusted
-            # in __init__ to ngf*8 + C_sp_map. This is a major structural change based on a flag.
-            # This makes dynamic layer sizing based on config flags crucial in __init__.
+            x = torch.cat([x, spatial_map_g], dim=1) # x is now [B, ngf*8 + C_sp_map, 4, 4]
 
-            # For simplicity, assume __init__ already configured layers based on these flags.
-            # This means the `ngf*8` for the BatchNorm2d and `ngf*8` as in_channels for the next ConvTranspose2d
-            # should actually be `ngf*8 + C_sp_map_channels_g` if spatial_cond is true.
-            # This implies the __init__ logic for DCGANGenerator needs to be more dynamic.
+            # Pass through the rest of the initially defined main network layers
+            # self.main[1] (BatchNorm) and self.main[2] (ReLU) were already configured with the correct channel size in __init__
+            x = self.main[1](x) # BatchNorm
+            x = self.main[2](x) # ReLU
 
-        # Pass through the rest of the main sequential model
-        # If C1 is active, x now has more channels. The subsequent layers in self.main must be built to expect this.
-        # This is a limitation of modifying fixed Sequential models.
-        # A more robust way is to have conditional branches or separate model parts.
-
-        # Given current self.main is fixed at __init__, C1 is hard to inject this way
-        # without rebuilding parts of self.main or making self.main itself more modular in forward.
-
-        # --- Simpler approach for C1 & C2 for DCGAN (assuming __init__ handles channel changes): ---
-        # The __init__ of DCGANGenerator needs to be aware of these conditioning flags
-        # to set the correct `nz` for the first ConvTranspose2d (for C2)
-        # and the correct `in_channels` for the ConvTranspose2d after spatial feature concatenation (for C1).
-        # Let's assume for now that the `main` Sequential network was built correctly in `__init__`
-        # accounting for these potential channel changes.
-
-        # If C1 is active, the `main` network itself must be structured to take the concatenated input
-        # at the appropriate point. This usually means the first layer of `main` (or a sub-module)
-        # would take the combined input.
-        # The current DCGAN `main` starts with ConvTranspose2d(nz, ngf*8, ...).
-        # If `dcgan_g_spatial_cond` is true, `nz` for this layer would need to be `z_dim + C_sp_map_channels_g`
-        # and `z_noise` would need to be `cat(z_original_noise_spatial, spatial_map_g_resized_to_z_spatial)`.
-        # This is getting complicated for a simple sequential `main`.
-
-        # --- Revisiting DCGAN G forward with conditioning: ---
-        # Let's assume __init__ has already adjusted layer dimensions if conditioning is on.
-
-        # 1. Handle C2 (Latent condition): Modifies z_noise input to the first layer.
-        #    The `nz` in `self.main[0]` (ConvTranspose2d) should be `z_dim_orig + z_sp_embed_dim`.
-        _z = z_noise
-        if self.config_model.dcgan_g_latent_cond and z_superpixel_g is not None:
-            if _z.ndim == 4 and _z.shape[2:] == (1,1): _z = _z.squeeze(-1).squeeze(-1)
-            _z = torch.cat([_z, z_superpixel_g], dim=1)
-
-        if _z.ndim == 2: _z = _z.unsqueeze(-1).unsqueeze(-1) # to [B, combined_z, 1, 1]
-
-        # 2. Handle C1 (Spatial condition):
-        #    If active, `spatial_map_g` (e.g. [B, C_sp, H_z, W_z]) is concatenated to z.
-        #    This means `_z` should be made spatial first if it's not.
-        #    And `nz` for `self.main[0]` would be `z_dim_orig (+ z_sp_embed_dim) + C_sp_map_channels_g`.
-        #    This assumes `spatial_map_g` is resized to the initial spatial size of z if z is made spatial.
-        #    This is the most complex to retrofit.
-
-        # --- Simplest initial pass for forward() assuming __init__ is pre-configured ---
-        # Option A: C2 happens before main, C1 is not straightforward with current G.main.
-        # Option B: G.main takes z, and if C1, G.main internally handles concat after first layer. (Requires G.main to be non-Sequential)
-
-        # Let's stick to: C2 modifies z_noise that goes into existing self.main[0].
-        # C1 will be harder. For now, let's focus C2 for G, and C4 for D.
-        # If C1 for G: The first layer of DCGAN (ConvTranspose2d) is problematic for spatial concat
-        # unless z itself becomes spatial and concat happens there.
-
-        # Assuming `self.main` was constructed in `__init__` with the correct `nz`
-        # (original z_dim + embed_dim if latent_cond else original z_dim)
-
-        # For C1 (Spatial Cond for G): This is tricky with current DCGAN structure.
-        # A common way for spatial conditioning is to have G take noise + conditional map as input.
-        # If G's first layer is ConvTranspose2d(input_latent_dim, ...), then input_latent_dim
-        # would be z_dim + (spatial_map_channels * H_map * W_map) if flattened.
-        # Or, if z is also made spatial, then concat channels.
-        # Given DCGAN's typical structure (z=[B,nz,1,1] -> ConvTranspose), C1 is non-trivial.
-        # We might need to make z spatial first [B, nz, H0, W0] and concat spatial_map_g there,
-        # then use Conv2d instead of ConvTranspose2d for the first layer.
-        # This is a big architectural change.
-
-        # Let's assume for now:
-        # - C2 (latent) modifies `z_noise` as done above.
-        # - C1 (spatial for G) will be skipped for DCGAN G in this pass due to complexity with its structure.
-        #   It's more naturally applied to StyleGAN-like Gs where there's an initial const/spatial feature map.
-        # The `main` network in `__init__` would be built with `nz = z_dim_orig + z_sp_embed_dim` if C2 is on.
-
-        # Final z_noise going into the network (potentially combined with z_superpixel_g)
-        if z_noise.ndim == 2: # If it became 2D due to C2 logic, ensure it's 4D for conv
-             z_noise = z_noise.unsqueeze(-1).unsqueeze(-1)
-
-        return self.main(z_noise)
+            # Now pass through the *rest* of the main sequence, starting from the third layer group
+            # (the ConvTranspose2d that takes the (ngf*8 + C_sp_map) features)
+            for i in range(3, len(self.main)):
+                 x = self.main[i](x)
+            return x
+        else:
+            # If not using spatial conditioning, pass z_noise through the whole main network as is.
+            return self.main(z_noise)
 
 
 class DCGANDiscriminator(nn.Module):
