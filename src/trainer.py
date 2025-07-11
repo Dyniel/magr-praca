@@ -7,8 +7,6 @@ import wandb  # Assuming wandb is used for logging, can be made optional
 
 # Project specific imports - these might need adjustment based on actual file structure and names
 from src.models import (
-    Generator as GAN5Generator, Discriminator as GAN5Discriminator,  # gan5_gcn
-    GraphEncoderGAT, GeneratorCNN as GAN6Generator, DiscriminatorCNN as GAN6Discriminator,  # gan6_gat_cnn
     DCGANGenerator, DCGANDiscriminator,
     StyleGAN2Generator, StyleGAN2Discriminator,
     StyleGAN3Generator, StyleGAN3Discriminator,  # Assuming these exist
