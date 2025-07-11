@@ -121,7 +121,7 @@ class Trainer:
             self.G = ProjectedGANGenerator(self.config).to(self.device)
             self.D = ProjectedGANDiscriminator(self.config).to(self.device)
             self.E = None
-        # Removed CycleGAN block from _init_models
+
         elif self.model_architecture == "histogan": # HistoGAN uses StyleGAN2 backbone
             self.G = StyleGAN2Generator(self.config).to(self.device)
             self.D = StyleGAN2Discriminator(self.config).to(self.device)
@@ -129,6 +129,7 @@ class Trainer:
             self.w_avg = None # For StyleGAN2 truncation if used
             if self.config.model.stylegan2_use_truncation: # HistoGAN might use truncation
                  pass # Placeholder for w_avg calculation/loading if needed
+
         else:
             raise ValueError(f"Unsupported model architecture: {self.model_architecture}")
 
@@ -156,6 +157,7 @@ class Trainer:
         # Removed CycleGAN specific optimizer initialization
         self.optimizer_G = optim.Adam(
             g_params,
+
                 lr=self.config.optimizer.g_lr,
                 betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
             )
@@ -187,7 +189,7 @@ class Trainer:
             self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
                  F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
             self.loss_fn_g_feat_match = nn.MSELoss() # Specific to ProjectedGAN G loss
-        # Removed CycleGAN loss initialization
+
         elif self.model_architecture == "histogan":
             # HistoGAN uses StyleGAN2's adversarial losses + its own histogram loss
             self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
@@ -199,6 +201,7 @@ class Trainer:
                 value_range=self.config.model.histogan_image_value_range
             ).to(self.device)
             print(f"HistoGAN Histogram Loss initialized: bins={self.config.model.histogan_histogram_bins}, type={self.config.model.histogan_histogram_loss_type}")
+
         else:
             self.loss_fn_g_adv = None # Generic name for primary G adversarial loss
             self.loss_fn_d_adv = None # Generic name for primary D adversarial loss
@@ -241,6 +244,7 @@ class Trainer:
                 real_images_gan_norm = None; segments_map = None; adj_matrix = None; graph_batch_pyg = None
 
                 # Data loading for non-CycleGAN architectures
+
                     if self.model_architecture == "gan6_gat_cnn" and isinstance(raw_batch_data, list) and len(raw_batch_data) > 0: # Workaround
                         real_images_gan_norm = raw_batch_data[0].to(self.device)
                         graph_batch_pyg = None

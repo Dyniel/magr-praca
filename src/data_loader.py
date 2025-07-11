@@ -223,6 +223,7 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
     # Removed 'cyclegan' specific path.
 
     if dataset_type in standard_gan_architectures:
+      
         if use_sp_conditioning:
             # These GANs, when conditioned, will use C1, C2, C4 which rely on superpixel segments
             # and mean features derived from them. So, SuperpixelDataset is appropriate.
@@ -323,5 +324,3 @@ class ImageDataset(Dataset):
             return None
 
 # UnpairedImageDataset class removed.
-
-# Removed the print("src/data_loader.py created...") as it's an overwrite

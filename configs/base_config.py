@@ -139,7 +139,6 @@ class ModelConfig:
     projectedgan_projection_dims: int = 256 # Example dim if D were to project features (not used in current D model)
     projectedgan_feature_matching_loss_weight: float = 10.0 # Weight for feature matching loss for G
 
-    # CycleGAN parameters have been removed.
 
     # --- Parameters for HistoGAN architecture ---
     # HistoGAN typically builds on StyleGAN2. These params are for its specific loss.

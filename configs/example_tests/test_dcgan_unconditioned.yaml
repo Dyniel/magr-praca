@@ -3,6 +3,7 @@ project_name: "GAN_Tests"
 run_name: "dcgan_unconditioned_smoke_test"
 
 dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+
 cache_dir: "./cache_test_dcgan_uncond"
 image_size: 64
 num_superpixels: 50 # Ignored as use_superpixel_conditioning is false

@@ -37,6 +37,7 @@ optimizer:
 logging:
   use_wandb: true
   wandb_entity: "ciedaniel"
+
   wandb_project_name: ${project_name}
   wandb_run_name: ${run_name}
   log_freq_step: 10
