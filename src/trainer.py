@@ -13,7 +13,7 @@ from src.models import (
     StyleGAN2Generator, StyleGAN2Discriminator,
     StyleGAN3Generator, StyleGAN3Discriminator,  # Assuming these exist
     ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor,  # Assuming these exist
-    SuperpixelLatentEncoder
+    SuperpixelLatentEncoder # CycleGANGenerator, CycleGANDiscriminator removed from imports
 )
 from src.augmentations import ADAManager # Import ADAManager
 from src.data_loader import get_dataloader
@@ -121,25 +121,7 @@ class Trainer:
             self.G = ProjectedGANGenerator(self.config).to(self.device)
             self.D = ProjectedGANDiscriminator(self.config).to(self.device)
             self.E = None
-        elif self.model_architecture == "cyclegan":
-            # For CycleGAN, G is G_A2B, E is G_B2A (repurposing E slot conceptually)
-            # D is D_A, and we'll need another D_B
-            self.G_A2B = CycleGANGenerator(input_nc=self.config.model.cyclegan_input_nc,
-                                           output_nc=self.config.model.cyclegan_output_nc,
-                                           ngf=self.config.model.cyclegan_ngf,
-                                           n_residual_blocks=self.config.model.cyclegan_n_blocks_gen).to(self.device)
-            self.G_B2A = CycleGANGenerator(input_nc=self.config.model.cyclegan_output_nc, # B to A
-                                           output_nc=self.config.model.cyclegan_input_nc,
-                                           ngf=self.config.model.cyclegan_ngf,
-                                           n_residual_blocks=self.config.model.cyclegan_n_blocks_gen).to(self.device)
-            self.D_A = CycleGANDiscriminator(input_nc=self.config.model.cyclegan_output_nc).to(self.device) # D_A discriminates real B and fake B (from G_A2B)
-            self.D_B = CycleGANDiscriminator(input_nc=self.config.model.cyclegan_input_nc).to(self.device) # D_B discriminates real A and fake A (from G_B2A)
 
-            # To fit the existing structure slightly, let's alias G_A2B to self.G for some logging/watch purposes if needed.
-            # However, training logic will refer to G_A2B and G_B2A directly.
-            self.G = self.G_A2B
-            self.D = self.D_A # Main D for watching, D_B is separate
-            self.E = self.G_B2A # Using E slot for G_B2A for watching if needed
         elif self.model_architecture == "histogan": # HistoGAN uses StyleGAN2 backbone
             self.G = StyleGAN2Generator(self.config).to(self.device)
             self.D = StyleGAN2Discriminator(self.config).to(self.device)
@@ -169,20 +151,13 @@ class Trainer:
 
     def _init_optimizers(self):
         g_params = list(self.G.parameters())
-        if self.E: g_params += list(self.E.parameters()) # For gan6 E or CycleGAN G_B2A
+        if self.E: g_params += list(self.E.parameters()) # For gan6 E (now removed) or other future E
         if self.sp_latent_encoder: g_params += list(self.sp_latent_encoder.parameters())
 
-        if self.model_architecture == "cyclegan":
-            self.optimizer_G_A2B = optim.Adam(self.G_A2B.parameters(), lr=self.config.optimizer.g_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
-            self.optimizer_G_B2A = optim.Adam(self.G_B2A.parameters(), lr=self.config.optimizer.g_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
-            self.optimizer_D_A = optim.Adam(self.D_A.parameters(), lr=self.config.optimizer.d_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
-            self.optimizer_D_B = optim.Adam(self.D_B.parameters(), lr=self.config.optimizer.d_lr, betas=(self.config.optimizer.beta1, self.config.optimizer.beta2))
-            # For compatibility with potential G logging, self.optimizer_G can point to one of them.
-            self.optimizer_G = self.optimizer_G_A2B
-            self.optimizer_D = self.optimizer_D_A
-        else:
-            self.optimizer_G = optim.Adam(
-                g_params,
+        # Removed CycleGAN specific optimizer initialization
+        self.optimizer_G = optim.Adam(
+            g_params,
+
                 lr=self.config.optimizer.g_lr,
                 betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
             )
@@ -214,11 +189,7 @@ class Trainer:
             self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
                  F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
             self.loss_fn_g_feat_match = nn.MSELoss() # Specific to ProjectedGAN G loss
-        elif self.model_architecture == "cyclegan":
-            self.loss_fn_g_adv = nn.MSELoss() # CycleGAN typically uses MSE for adversarial loss against PatchGAN
-            self.loss_fn_d_adv = nn.MSELoss() # For D, target is 1.0 for real, 0.0 for fake (or vice-versa if logits are used differently)
-            self.loss_fn_cycle = nn.L1Loss()
-            self.loss_fn_identity = nn.L1Loss()
+
         elif self.model_architecture == "histogan":
             # HistoGAN uses StyleGAN2's adversarial losses + its own histogram loss
             self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
@@ -268,130 +239,12 @@ class Trainer:
                 self.current_iteration += 1
                 logs = {} # Initialize logs dict for each iteration
 
-                if self.model_architecture == "cyclegan":
-                    # CycleGAN specific training loop
-                    # Assumes data loader for CycleGAN yields a dict: {'A': real_A_tensor, 'B': real_B_tensor}
-                    if not isinstance(raw_batch_data, dict) or 'A' not in raw_batch_data or 'B' not in raw_batch_data:
-                        print(f"Warning: CycleGAN training step expected dict with 'A' and 'B' images, got {type(raw_batch_data)}. Skipping batch.")
-                        continue
+                # Removed CycleGAN specific training block.
+                # The code below is the original training loop for other GAN architectures.
+                real_images_gan_norm = None; segments_map = None; adj_matrix = None; graph_batch_pyg = None
 
-                    real_A = raw_batch_data['A'].to(self.device)
-                    real_B = raw_batch_data['B'].to(self.device)
-                    current_batch_size = real_A.size(0)
+                # Data loading for non-CycleGAN architectures
 
-                    # Create dummy PatchGAN output for target shape (this is a common way)
-                    # Actual PatchGAN output shape depends on D's architecture and input image size
-                    # For now, let's assume a fixed dummy output shape for target_real/target_fake
-                    # A better way is to pass a real image through D once to get the shape.
-                    # Example: dummy_D_output_shape = self.D_A(real_B).shape
-                    # For simplicity, assuming D_A and D_B output [N, 1, H_patch, W_patch]
-                    # We need to get the actual output shape from one of the discriminators.
-                    # This must be done carefully as D might not be initialized fully if this is first iter.
-                    # Let's assume they are initialized and can take real_A/real_B.
-
-                    # Determine target shapes for adversarial losses
-                    # D_A discriminates domain B images, D_B discriminates domain A images
-                    # Target for real images is 1.0, for fake is 0.0
-                    # The shape of target_real/fake should match D's output shape.
-                    # We can get this by doing a forward pass.
-                    # To avoid issues if D_A/D_B are not fully ready on first pass (unlikely here but good practice):
-                    try:
-                        target_real_shape_A = self.D_A(self.G_A2B(real_A)).shape # D_A sees fake_B
-                        target_real_shape_B = self.D_B(self.G_B2A(real_B)).shape # D_B sees fake_A
-                    except Exception as e:
-                        print(f"Error getting target shapes from D_A/D_B for CycleGAN: {e}. Skipping batch.")
-                        continue
-
-                    target_real_A = torch.ones(target_real_shape_A, device=self.device)
-                    target_fake_A = torch.zeros(target_real_shape_A, device=self.device)
-                    target_real_B = torch.ones(target_real_shape_B, device=self.device)
-                    target_fake_B = torch.zeros(target_real_shape_B, device=self.device)
-
-
-                    # --- Train Generators G_A2B and G_B2A ---
-                    toggle_grad(self.D_A, False); toggle_grad(self.D_B, False) # Ds require no grads when optimizing Gs
-                    self.G_A2B.train(); self.G_B2A.train()
-                    self.optimizer_G_A2B.zero_grad()
-                    self.optimizer_G_B2A.zero_grad() # Combined optimizer for Gs
-
-                    # Identity losses (optional)
-                    loss_identity_total = torch.tensor(0.0, device=self.device)
-                    if self.config.model.cyclegan_lambda_identity > 0:
-                        identity_B = self.G_A2B(real_B) # G_A2B(B) should be B
-                        loss_identity_B = self.loss_fn_identity(identity_B, real_B) * self.config.model.cyclegan_lambda_identity
-                        logs["Loss_G_Identity_B"] = loss_identity_B.item()
-
-                        identity_A = self.G_B2A(real_A) # G_B2A(A) should be A
-                        loss_identity_A = self.loss_fn_identity(identity_A, real_A) * self.config.model.cyclegan_lambda_identity
-                        logs["Loss_G_Identity_A"] = loss_identity_A.item()
-                        loss_identity_total = loss_identity_A + loss_identity_B
-
-                    # Adversarial losses for G_A2B (makes fake_B look real for D_A)
-                    fake_B = self.G_A2B(real_A)
-                    pred_fake_B_for_G = self.D_A(fake_B)
-                    loss_G_A2B_adv = self.loss_fn_g_adv(pred_fake_B_for_G, target_real_A)
-                    logs["Loss_G_A2B_Adv"] = loss_G_A2B_adv.item()
-
-                    # Adversarial losses for G_B2A (makes fake_A look real for D_B)
-                    fake_A = self.G_B2A(real_B)
-                    pred_fake_A_for_G = self.D_B(fake_A)
-                    loss_G_B2A_adv = self.loss_fn_g_adv(pred_fake_A_for_G, target_real_B)
-                    logs["Loss_G_B2A_Adv"] = loss_G_B2A_adv.item()
-
-                    # Cycle consistency losses
-                    reconstructed_A = self.G_B2A(fake_B) # real_A -> fake_B -> reconstructed_A
-                    loss_cycle_A = self.loss_fn_cycle(reconstructed_A, real_A) * self.config.model.cyclegan_lambda_cycle_a
-                    logs["Loss_G_Cycle_A"] = loss_cycle_A.item()
-
-                    reconstructed_B = self.G_A2B(fake_A) # real_B -> fake_A -> reconstructed_B
-                    loss_cycle_B = self.loss_fn_cycle(reconstructed_B, real_B) * self.config.model.cyclegan_lambda_cycle_b
-                    logs["Loss_G_Cycle_B"] = loss_cycle_B.item()
-
-                    # Total generator loss
-                    loss_G_total = loss_G_A2B_adv + loss_G_B2A_adv + loss_cycle_A + loss_cycle_B + loss_identity_total
-                    loss_G_total.backward()
-                    self.optimizer_G_A2B.step() # Step individual optimizers for Gs
-                    self.optimizer_G_B2A.step()
-                    logs["Loss_G_Total"] = loss_G_total.item()
-
-                    # --- Train Discriminator D_A (distinguishes real_B from fake_B) ---
-                    toggle_grad(self.D_A, True)
-                    self.D_A.train()
-                    self.optimizer_D_A.zero_grad()
-
-                    pred_real_B_for_D_A = self.D_A(real_B)
-                    loss_D_A_real = self.loss_fn_d_adv(pred_real_B_for_D_A, target_real_A)
-
-                    # Use fake_B from G_A2B, detach from G's graph
-                    # TODO: Consider using an image buffer for fake images to stabilize D training (ImagePool class)
-                    pred_fake_B_for_D_A = self.D_A(fake_B.detach())
-                    loss_D_A_fake = self.loss_fn_d_adv(pred_fake_B_for_D_A, target_fake_A)
-
-                    loss_D_A = (loss_D_A_real + loss_D_A_fake) * 0.5
-                    loss_D_A.backward()
-                    self.optimizer_D_A.step()
-                    logs["Loss_D_A"] = loss_D_A.item()
-
-                    # --- Train Discriminator D_B (distinguishes real_A from fake_A) ---
-                    toggle_grad(self.D_B, True)
-                    self.D_B.train()
-                    self.optimizer_D_B.zero_grad()
-
-                    pred_real_A_for_D_B = self.D_B(real_A)
-                    loss_D_B_real = self.loss_fn_d_adv(pred_real_A_for_D_B, target_real_B)
-
-                    pred_fake_A_for_D_B = self.D_B(fake_A.detach())
-                    loss_D_B_fake = self.loss_fn_d_adv(pred_fake_A_for_D_B, target_fake_B)
-
-                    loss_D_B = (loss_D_B_real + loss_D_B_fake) * 0.5
-                    loss_D_B.backward()
-                    self.optimizer_D_B.step()
-                    logs["Loss_D_B"] = loss_D_B.item()
-
-                else: # Original training loop for other GAN architectures
-                    real_images_gan_norm = None; segments_map = None; adj_matrix = None; graph_batch_pyg = None
-
-                    # Data loading for non-CycleGAN architectures
                     if self.model_architecture == "gan6_gat_cnn" and isinstance(raw_batch_data, list) and len(raw_batch_data) > 0: # Workaround
                         real_images_gan_norm = raw_batch_data[0].to(self.device)
                         graph_batch_pyg = None

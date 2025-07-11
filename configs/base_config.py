@@ -139,16 +139,6 @@ class ModelConfig:
     projectedgan_projection_dims: int = 256 # Example dim if D were to project features (not used in current D model)
     projectedgan_feature_matching_loss_weight: float = 10.0 # Weight for feature matching loss for G
 
-    # --- Parameters for CycleGAN architecture ---
-    cyclegan_input_nc: int = 3  # Number of channels in input images
-    cyclegan_output_nc: int = 3 # Number of channels in output images
-    cyclegan_ngf: int = 64      # Number of generator filters in the first conv layer
-    cyclegan_ndf: int = 64      # Number of discriminator filters in the first conv layer
-    cyclegan_n_blocks_gen: int = 9 # Number of residual blocks in CycleGAN generator
-    cyclegan_n_layers_disc: int = 3 # Number of layers in CycleGAN PatchGAN discriminator
-    cyclegan_lambda_cycle_a: float = 10.0 # Weight for cycle consistency loss (A -> B -> A)
-    cyclegan_lambda_cycle_b: float = 10.0 # Weight for cycle consistency loss (B -> A -> B)
-    cyclegan_lambda_identity: float = 0.5 # Weight for identity loss. If > 0, identity loss is used.
 
     # --- Parameters for HistoGAN architecture ---
     # HistoGAN typically builds on StyleGAN2. These params are for its specific loss.

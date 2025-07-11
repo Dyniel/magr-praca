@@ -2,7 +2,7 @@
 project_name: "GAN_Tests"
 run_name: "stylegan3_unconditioned_smoke_test"
 
-dataset_path: "/path/to/your/image/dataset" # <<<<<< IMPORTANT: CHANGE THIS
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
 cache_dir: "./cache_test_sg3_uncond"
 image_size: 64
 num_superpixels: 50 # Ignored
@@ -31,7 +31,7 @@ optimizer:
 
 logging:
   use_wandb: true
-  wandb_entity: "YOUR_WANDB_ENTITY" # <<<<<< IMPORTANT: CHANGE THIS
+  wandb_entity: "ciedaniel"
   wandb_project_name: ${project_name}
   wandb_run_name: ${run_name}
   log_freq_step: 10
