@@ -185,10 +185,10 @@ class BaseConfig:
 
     # --- Model Configuration ---
     # This will be a nested structure, defined below
-    model: 'ModelConfig' = field(default_factory=ModelConfig)
+    model: ModelConfig = field(default_factory=lambda: ModelConfig())
 
     # --- Optimizer Configuration ---
-    optimizer: 'OptimizerConfig' = field(default_factory=OptimizerConfig)
+    optimizer: OptimizerConfig = field(default_factory=lambda: OptimizerConfig())
 
     # --- Training Hyperparameters ---
     batch_size: int = 16
@@ -201,7 +201,8 @@ class BaseConfig:
     gradient_accumulation_steps: int = 1 # Number of steps to accumulate gradients before optimizer step
 
     # --- Logging Configuration ---
-    logging: 'LoggingConfig' = field(default_factory=lambda: LoggingConfig())
+    logging: LoggingConfig = field(default_factory=lambda: LoggingConfig())
+
 
     # --- FID Configuration (kept separate for now or could be part of LoggingConfig) ---
     # fid_incep_path: str = "path/to/inception_v3_fid.pt" # Not used if using pytorch-fid's default
