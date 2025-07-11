@@ -203,6 +203,7 @@ class BaseConfig:
     # --- Logging Configuration ---
     logging: LoggingConfig = field(default_factory=lambda: LoggingConfig())
 
+
     # --- FID Configuration (kept separate for now or could be part of LoggingConfig) ---
     # fid_incep_path: str = "path/to/inception_v3_fid.pt" # Not used if using pytorch-fid's default
     fid_num_images: int = 5000 # Number of real/fake images to use for FID
