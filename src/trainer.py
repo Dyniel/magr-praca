@@ -264,36 +264,36 @@ class Trainer:
                 if current_batch_size == 0: continue
 
                 # Superpixel conditioning data prep (for non-CycleGAN)
-                    spatial_map_g, spatial_map_d, z_superpixel_g = None, None, None
-                    g_spatial_active = getattr(self.config.model, f"{self.model_architecture}_g_spatial_cond", False)
-                    d_spatial_active = getattr(self.config.model, f"{self.model_architecture}_d_spatial_cond", False)
-                    g_latent_active = self.sp_latent_encoder is not None and \
-                                      getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False)
+                spatial_map_g, spatial_map_d, z_superpixel_g = None, None, None
+                g_spatial_active = getattr(self.config.model, f"{self.model_architecture}_g_spatial_cond", False)
+                d_spatial_active = getattr(self.config.model, f"{self.model_architecture}_d_spatial_cond", False)
+                g_latent_active = self.sp_latent_encoder is not None and \
+                                  getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False)
 
-                    if self.config.model.use_superpixel_conditioning and segments_map is not None and \
-                       (g_spatial_active or d_spatial_active or g_latent_active):
-                        real_images_01 = denormalize_image(real_images_gan_norm)
+                if self.config.model.use_superpixel_conditioning and segments_map is not None and \
+                   (g_spatial_active or d_spatial_active or g_latent_active):
+                    real_images_01 = denormalize_image(real_images_gan_norm)
 
-                        if g_spatial_active:
-                            spatial_map_g = generate_spatial_superpixel_map(
-                                segments_map, self.config.model.superpixel_spatial_map_channels_g,
-                                self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
-                            if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan", "dcgan"] and \
-                               hasattr(self.config.model, "superpixel_spatial_map_channels_g") and self.config.model.superpixel_spatial_map_channels_g > 0 and \
-                               spatial_map_g is not None and spatial_map_g.shape[-1] != 4:
-                                 spatial_map_g = F.interpolate(spatial_map_g, size=(4,4), mode='nearest')
-
-                        if d_spatial_active:
-                            spatial_map_d = generate_spatial_superpixel_map(
-                            segments_map, self.config.model.superpixel_spatial_map_channels_d,
+                    if g_spatial_active:
+                        spatial_map_g = generate_spatial_superpixel_map(
+                            segments_map, self.config.model.superpixel_spatial_map_channels_g,
                             self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
+                        if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan", "dcgan"] and \
+                           hasattr(self.config.model, "superpixel_spatial_map_channels_g") and self.config.model.superpixel_spatial_map_channels_g > 0 and \
+                           spatial_map_g is not None and spatial_map_g.shape[-1] != 4:
+                             spatial_map_g = F.interpolate(spatial_map_g, size=(4,4), mode='nearest')
 
-                    if g_latent_active:
-                        mean_sp_feats = calculate_mean_superpixel_features(
-                            real_images_01, segments_map,
-                            self.sp_latent_encoder.num_superpixels, self.config.model.superpixel_feature_dim).to(
-                            self.device)
-                        z_superpixel_g = self.sp_latent_encoder(mean_sp_feats)
+                    if d_spatial_active:
+                        spatial_map_d = generate_spatial_superpixel_map(
+                        segments_map, self.config.model.superpixel_spatial_map_channels_d,
+                        self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
+
+                if g_latent_active: # This if block was also incorrectly indented
+                    mean_sp_feats = calculate_mean_superpixel_features(
+                        real_images_01, segments_map,
+                        self.sp_latent_encoder.num_superpixels, self.config.model.superpixel_feature_dim).to(
+                        self.device)
+                    z_superpixel_g = self.sp_latent_encoder(mean_sp_feats)
 
                 toggle_grad(self.D, True)
                 self.optimizer_D.zero_grad()
