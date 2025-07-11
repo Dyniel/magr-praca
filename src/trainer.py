@@ -100,15 +100,8 @@ class Trainer:
 
     def _init_models(self):
         # Generator and Discriminator
-        if self.model_architecture == "gan5_gcn":
-            self.G = GAN5Generator(self.config).to(self.device)
-            self.D = GAN5Discriminator(self.config).to(self.device)
-            self.E = None  # gan5_gcn doesn't use a separate E model in this structure
-        elif self.model_architecture == "gan6_gat_cnn":
-            self.G = GAN6Generator(self.config).to(self.device)
-            self.D = GAN6Discriminator(self.config).to(self.device)
-            self.E = GraphEncoderGAT(self.config).to(self.device) if self.config.model.gan6_use_graph_encoder else None
-        elif self.model_architecture == "dcgan":
+        # Removed gan5_gcn and gan6_gat_cnn cases
+        if self.model_architecture == "dcgan":
             self.G = DCGANGenerator(self.config).to(self.device)
             self.D = DCGANDiscriminator(self.config).to(self.device)
             self.E = None
