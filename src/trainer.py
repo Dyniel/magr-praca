@@ -112,7 +112,7 @@ class Trainer:
             self.E = None
             self.w_avg = None
             if self.config.model.stylegan2_use_truncation:
-                 pass
+                pass
         elif self.model_architecture == "stylegan3":
             self.G = StyleGAN3Generator(self.config).to(self.device)
             self.D = StyleGAN3Discriminator(self.config).to(self.device)
@@ -128,7 +128,7 @@ class Trainer:
             self.E = None # No separate encoder for HistoGAN in this context
             self.w_avg = None # For StyleGAN2 truncation if used
             if self.config.model.stylegan2_use_truncation: # HistoGAN might use truncation
-                 pass # Placeholder for w_avg calculation/loading if needed
+                pass # Placeholder for w_avg calculation/loading if needed
 
         else:
             raise ValueError(f"Unsupported model architecture: {self.model_architecture}")
@@ -157,15 +157,14 @@ class Trainer:
         # Removed CycleGAN specific optimizer initialization
         self.optimizer_G = optim.Adam(
             g_params,
-
-                lr=self.config.optimizer.g_lr,
-                betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
-            )
-            self.optimizer_D = optim.Adam(
-                self.D.parameters(), # Assumes self.D is the primary discriminator
-                lr=self.config.optimizer.d_lr,
-                betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
-            )
+            lr=self.config.optimizer.g_lr,
+            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
+        )
+        self.optimizer_D = optim.Adam(
+            self.D.parameters(), # Assumes self.D is the primary discriminator
+            lr=self.config.optimizer.d_lr,
+            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
+        )
         print("Optimizers initialized.")
 
     def _init_loss_functions(self):
@@ -244,11 +243,10 @@ class Trainer:
                 real_images_gan_norm = None; segments_map = None; adj_matrix = None; graph_batch_pyg = None
 
                 # Data loading for non-CycleGAN architectures
-
-                    if self.model_architecture == "gan6_gat_cnn" and isinstance(raw_batch_data, list) and len(raw_batch_data) > 0: # Workaround
-                        real_images_gan_norm = raw_batch_data[0].to(self.device)
-                        graph_batch_pyg = None
-                    elif isinstance(raw_batch_data, dict) and "image" in raw_batch_data: # SuperpixelDataset or ImageDataset
+                if self.model_architecture == "gan6_gat_cnn" and isinstance(raw_batch_data, list) and len(raw_batch_data) > 0: # Workaround
+                    real_images_gan_norm = raw_batch_data[0].to(self.device)
+                    graph_batch_pyg = None
+                elif isinstance(raw_batch_data, dict) and "image" in raw_batch_data: # SuperpixelDataset or ImageDataset
                         real_images_gan_norm = raw_batch_data["image"].to(self.device)
                         if "segments" in raw_batch_data: segments_map = raw_batch_data["segments"].to(self.device)
                         if "adj" in raw_batch_data: adj_matrix = raw_batch_data["adj"].to(self.device)
@@ -268,25 +266,25 @@ class Trainer:
                     # Superpixel conditioning data prep (for non-CycleGAN)
                     spatial_map_g, spatial_map_d, z_superpixel_g = None, None, None
                     g_spatial_active = getattr(self.config.model, f"{self.model_architecture}_g_spatial_cond", False)
-                d_spatial_active = getattr(self.config.model, f"{self.model_architecture}_d_spatial_cond", False)
-                g_latent_active = self.sp_latent_encoder is not None and \
-                                  getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False)
+                    d_spatial_active = getattr(self.config.model, f"{self.model_architecture}_d_spatial_cond", False)
+                    g_latent_active = self.sp_latent_encoder is not None and \
+                                      getattr(self.config.model, f"{self.model_architecture}_g_latent_cond", False)
 
-                if self.config.model.use_superpixel_conditioning and segments_map is not None and \
-                   (g_spatial_active or d_spatial_active or g_latent_active):
-                    real_images_01 = denormalize_image(real_images_gan_norm)
+                    if self.config.model.use_superpixel_conditioning and segments_map is not None and \
+                       (g_spatial_active or d_spatial_active or g_latent_active):
+                        real_images_01 = denormalize_image(real_images_gan_norm)
 
-                    if g_spatial_active:
-                        spatial_map_g = generate_spatial_superpixel_map(
-                            segments_map, self.config.model.superpixel_spatial_map_channels_g,
-                            self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
-                        if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan", "dcgan"] and \
-                           hasattr(self.config.model, "superpixel_spatial_map_channels_g") and self.config.model.superpixel_spatial_map_channels_g > 0 and \
-                           spatial_map_g is not None and spatial_map_g.shape[-1] != 4:
-                             spatial_map_g = F.interpolate(spatial_map_g, size=(4,4), mode='nearest')
+                        if g_spatial_active:
+                            spatial_map_g = generate_spatial_superpixel_map(
+                                segments_map, self.config.model.superpixel_spatial_map_channels_g,
+                                self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
+                            if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan", "dcgan"] and \
+                               hasattr(self.config.model, "superpixel_spatial_map_channels_g") and self.config.model.superpixel_spatial_map_channels_g > 0 and \
+                               spatial_map_g is not None and spatial_map_g.shape[-1] != 4:
+                                 spatial_map_g = F.interpolate(spatial_map_g, size=(4,4), mode='nearest')
 
-                    if d_spatial_active:
-                        spatial_map_d = generate_spatial_superpixel_map(
+                        if d_spatial_active:
+                            spatial_map_d = generate_spatial_superpixel_map(
                             segments_map, self.config.model.superpixel_spatial_map_channels_d,
                             self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
 
@@ -360,7 +358,6 @@ class Trainer:
                 if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
                     lossD = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
                 else:
-
                     lossD = self.loss_fn_d(d_real_logits, d_fake_logits)
                 logs["Loss_D_Adv"] = lossD.item()
 
@@ -465,7 +462,7 @@ class Trainer:
                 elif self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0: # Fallback for older config
                     batch_iterator.set_postfix(logs)
                     if getattr(self.config, 'use_wandb', False) and wandb.run:
-                         wandb.log(logs, step=self.current_iteration)
+                        wandb.log(logs, step=self.current_iteration)
 
                 # ADA p_aug update logic
                 if self.model_architecture == "stylegan2" and self.ada_manager and \
@@ -526,7 +523,7 @@ class Trainer:
                        (getattr(self.config, 'use_wandb', False) and wandb.run):
                         eval_metrics = self._evaluate_on_split("val") # Also logs samples within _evaluate_on_split
                         if eval_metrics: # eval_metrics can be {} if dataloader is None
-                             wandb.log(eval_metrics, step=self.current_iteration)
+                            wandb.log(eval_metrics, step=self.current_iteration)
 
                 # Checkpointing (end of epoch based)
                 is_last_batch_of_epoch = (batch_idx == len(train_dataloader) - 1)
@@ -542,7 +539,6 @@ class Trainer:
         if hasattr(self.config, 'logging') and self.config.logging.use_wandb:
             wandb.finish()
         elif getattr(self.config, 'use_wandb', False):
-
             wandb.finish()
 
     def _evaluate_on_split(self, data_split: str):
@@ -583,7 +579,6 @@ class Trainer:
                     eval_real_images_gan_norm = raw_batch_data[0].to(self.device)
                     eval_graph_batch_pyg = None
                 elif isinstance(raw_batch_data, dict) and "image" in raw_batch_data:
-
                     eval_real_images_gan_norm = raw_batch_data["image"].to(self.device)
                     if "segments" in raw_batch_data: eval_segments_map = raw_batch_data["segments"].to(self.device)
                     if "adj" in raw_batch_data: eval_adj_matrix = raw_batch_data["adj"].to(self.device)
@@ -619,7 +614,6 @@ class Trainer:
                            eval_spatial_map_g is not None and eval_spatial_map_g.shape[-1] != 4:
                              eval_spatial_map_g = F.interpolate(eval_spatial_map_g, size=(4,4), mode='nearest')
                     if d_spatial_active_eval:
-
                         eval_spatial_map_d = generate_spatial_superpixel_map(
                             eval_segments_map, self.config.model.superpixel_spatial_map_channels_d,
                             self.config.image_size, self.config.num_superpixels, eval_real_images_01).to(self.device)
@@ -648,7 +642,6 @@ class Trainer:
                 if self.model_architecture == "gan5_gcn":
                     g_args_eval.extend([eval_real_images_gan_norm, eval_segments_map, eval_adj_matrix])
                 elif self.model_architecture == "gan6_gat_cnn":
-
                     if eval_graph_batch_pyg is not None and self.E is not None:
                         z_graph_eval = self.E(eval_graph_batch_pyg)
                         if self.config.model.gan6_gat_cnn_use_null_graph_embedding and self.E:
@@ -686,7 +679,6 @@ class Trainer:
                     lossD_adv_batch = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
                     lossG_batch = self.loss_fn_g_stylegan2(d_fake_logits)
                 else:
-
                     lossD_adv_batch = self.loss_fn_d(d_real_logits, d_fake_logits)
                     lossG_batch = self.loss_fn_g(d_fake_logits)
 
@@ -725,7 +717,6 @@ class Trainer:
             f"{data_split}/D_Fake_Logits_Mean": total_d_fake_logits / num_batches,
         }
         if self.model_architecture == "projected_gan" and total_g_feat_match_loss > 0 :
-
             avg_metrics[f"{data_split}/Loss_G_FeatMatch"] = total_g_feat_match_loss / num_batches
 
         print(f"Evaluation results for {data_split}: {avg_metrics}")
