@@ -217,18 +217,21 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
     collate_fn_to_use = None # Default collate_fn will be used if this remains None
 
     # Architectures that can run in a "standard" (non-superpixel-conditioned) mode
-    standard_gan_architectures = ["dcgan", "stylegan2", "stylegan3", "projected_gan"]
+    standard_gan_architectures = ["dcgan", "stylegan2", "stylegan3", "projected_gan", "histogan"]
 
-    if dataset_type == "gan6_gat_cnn":
-        if not PYG_AVAILABLE:
-            raise ImportError("PyTorch Geometric is required for 'gan6_gat_cnn' architecture but not found.")
-        print(f"Using ImageToGraphDataset for {data_split} (gan6_gat_cnn architecture).")
-        dataset = ImageToGraphDataset(image_paths=image_paths, config=config, data_split_name=data_split)
-        collate_fn_to_use = collate_graphs
-    elif dataset_type == "gan5_gcn":
-        # gan5_gcn always needs superpixels, segments, and adj matrix.
-        print(f"Using SuperpixelDataset for {data_split} (gan5_gcn architecture).")
-        dataset = SuperpixelDataset(image_paths=image_paths, config=config, data_split_name=data_split)
+    if dataset_type == "gan6_gat_cnn": # This case should no longer be hit as gan6 is removed
+        # Defensive coding: if it's somehow selected, raise error or handle.
+        raise ValueError("'gan6_gat_cnn' architecture is no longer supported.")
+        # if not PYG_AVAILABLE:
+        #     raise ImportError("PyTorch Geometric is required for 'gan6_gat_cnn' architecture but not found.")
+        # print(f"Using ImageToGraphDataset for {data_split} (gan6_gat_cnn architecture).")
+        # dataset = ImageToGraphDataset(image_paths=image_paths, config=config, data_split_name=data_split)
+        # collate_fn_to_use = collate_graphs
+    elif dataset_type == "gan5_gcn": # This case should no longer be hit
+        raise ValueError("'gan5_gcn' architecture is no longer supported.")
+        # # gan5_gcn always needs superpixels, segments, and adj matrix.
+        # print(f"Using SuperpixelDataset for {data_split} (gan5_gcn architecture).")
+        # dataset = SuperpixelDataset(image_paths=image_paths, config=config, data_split_name=data_split)
     elif dataset_type in standard_gan_architectures:
         if use_sp_conditioning:
             # These GANs, when conditioned, will use C1, C2, C4 which rely on superpixel segments

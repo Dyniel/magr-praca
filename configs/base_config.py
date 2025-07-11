@@ -35,7 +35,7 @@ class OptimizerConfig:
 class ModelConfig:
     """Configuration for the model architecture."""
     architecture: str = "stylegan2"  # Changed default from gan5_gcn
-                                     # Options: "dcgan", "stylegan2", "stylegan3", "projected_gan", "cyclegan"
+                                     # Options: "dcgan", "stylegan2", "stylegan3", "projected_gan", "cyclegan", "histogan"
 
     # --- Shared Hyperparameters ---
     # z_dim is now model-specific, e.g., stylegan2_z_dim, dcgan_z_dim, etc.
@@ -149,6 +149,18 @@ class ModelConfig:
     cyclegan_lambda_cycle_a: float = 10.0 # Weight for cycle consistency loss (A -> B -> A)
     cyclegan_lambda_cycle_b: float = 10.0 # Weight for cycle consistency loss (B -> A -> B)
     cyclegan_lambda_identity: float = 0.5 # Weight for identity loss. If > 0, identity loss is used.
+
+    # --- Parameters for HistoGAN architecture ---
+    # HistoGAN typically builds on StyleGAN2. These params are for its specific loss.
+    # StyleGAN2 specific parameters (stylegan2_z_dim, etc.) will be used by HistoGAN's base.
+    histogan_histogram_loss_weight: float = 1.0
+    histogan_histogram_bins: int = 256
+    histogan_histogram_loss_type: str = 'l1' # 'l1', 'l2', or 'cosine'
+    # Expected input range for images when calculating histogram loss.
+    # The HistogramLoss class will normalize images from this range to [0,1] before computing histograms.
+    # If your generator outputs [-1,1], set this to [-1.0, 1.0]. If [0,1], set to [0.0, 1.0].
+    histogan_image_value_range: tuple[float, float] = field(default_factory=lambda: (-1.0, 1.0))
+
 
 
 @dataclass

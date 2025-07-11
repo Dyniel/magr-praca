@@ -21,6 +21,7 @@ from src.utils import (
     denormalize_image, generate_spatial_superpixel_map, calculate_mean_superpixel_features,
     toggle_grad, compute_grad_penalty  # R1 gradient penalty
 )
+from src.losses import HistogramLoss # Import HistogramLoss
 
 
 # Add other necessary loss functions or utilities
@@ -139,6 +140,14 @@ class Trainer:
             self.G = self.G_A2B
             self.D = self.D_A # Main D for watching, D_B is separate
             self.E = self.G_B2A # Using E slot for G_B2A for watching if needed
+        elif self.model_architecture == "histogan": # HistoGAN uses StyleGAN2 backbone
+            self.G = StyleGAN2Generator(self.config).to(self.device)
+            self.D = StyleGAN2Discriminator(self.config).to(self.device)
+            self.E = None # No separate encoder for HistoGAN in this context
+            self.w_avg = None # For StyleGAN2 truncation if used
+            if self.config.model.stylegan2_use_truncation: # HistoGAN might use truncation
+                 pass # Placeholder for w_avg calculation/loading if needed
+
         else:
             raise ValueError(f"Unsupported model architecture: {self.model_architecture}")
 
@@ -210,6 +219,18 @@ class Trainer:
             self.loss_fn_d_adv = nn.MSELoss() # For D, target is 1.0 for real, 0.0 for fake (or vice-versa if logits are used differently)
             self.loss_fn_cycle = nn.L1Loss()
             self.loss_fn_identity = nn.L1Loss()
+        elif self.model_architecture == "histogan":
+            # HistoGAN uses StyleGAN2's adversarial losses + its own histogram loss
+            self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
+            self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
+                F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
+            self.loss_fn_histogram = HistogramLoss(
+                bins=self.config.model.histogan_histogram_bins,
+                loss_type=self.config.model.histogan_histogram_loss_type,
+                value_range=self.config.model.histogan_image_value_range
+            ).to(self.device)
+            print(f"HistoGAN Histogram Loss initialized: bins={self.config.model.histogan_histogram_bins}, type={self.config.model.histogan_histogram_loss_type}")
+
         else:
             self.loss_fn_g_adv = None # Generic name for primary G adversarial loss
             self.loss_fn_d_adv = None # Generic name for primary D adversarial loss
@@ -553,6 +574,15 @@ class Trainer:
                         lossG_adv = self.loss_fn_g(d_fake_logits_for_g)
                     logs["Loss_G_Adv"] = lossG_adv.item()
                     lossG = lossG_adv
+
+                    if self.model_architecture == "histogan":
+                        # Ensure images are in the range expected by HistogramLoss (e.g. [-1,1] or [0,1])
+                        # The HistogramLoss class itself handles internal normalization to [0,1] based on its value_range config
+                        # fake_images_for_g should be in the G's output range (e.g. Tanh -> [-1,1])
+                        # real_images_gan_norm is also in G's output range.
+                        lossG_hist = self.loss_fn_histogram(fake_images_for_g, real_images_gan_norm)
+                        lossG += self.config.model.histogan_histogram_loss_weight * lossG_hist
+                        logs["Loss_G_Hist"] = lossG_hist.item()
 
                     if self.model_architecture == "projected_gan":
                         real_01 = denormalize_image(real_images_gan_norm)
