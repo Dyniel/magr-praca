@@ -1,0 +1,49 @@
+# Example Test: HistoGAN
+project_name: "GAN_Tests"
+run_name: "histogan_smoke_test"
+
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+cache_dir: "./cache_test_histogan"
+image_size: 64
+num_superpixels: 50 # Ignored if use_superpixel_conditioning is false
+num_workers: 0
+device: "cuda"
+debug_num_images: 8
+batch_size: 2 # StyleGAN2 base can be memory intensive
+num_epochs: 1
+
+model:
+  architecture: "histogan"
+  use_superpixel_conditioning: false # HistoGAN paper primarily focuses on the loss, not this type of conditioning
+
+  # HistoGAN uses StyleGAN2 backbone, so these are relevant
+  stylegan2_z_dim: 256
+  stylegan2_w_dim: 256
+  stylegan2_n_mlp: 4
+  stylegan2_channel_multiplier: 1
+
+  # HistoGAN specific parameters
+  histogan_histogram_loss_weight: 1.0
+  histogan_histogram_bins: 128 # Fewer bins for faster test
+  histogan_histogram_loss_type: 'l1'
+  histogan_image_value_range: [-1.0, 1.0] # Assuming G outputs tanh images
+
+optimizer:
+  g_lr: 1e-4
+  d_lr: 1e-4
+  beta1: 0.0
+  beta2: 0.99
+
+logging:
+  use_wandb: true
+  wandb_entity: "ciedaniel"
+  wandb_project_name: ${project_name}
+  wandb_run_name: ${run_name}
+  log_freq_step: 10
+  sample_freq_epoch: 1
+  num_samples_to_log: 4
+  checkpoint_freq_epoch: 1
+
+enable_fid_calculation: false
+resume_checkpoint_path: null
+output_dir_base: "experiment_outputs_tests"

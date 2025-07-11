@@ -1,0 +1,41 @@
+# Example Test: DCGAN Unconditioned
+project_name: "GAN_Tests"
+run_name: "dcgan_unconditioned_smoke_test"
+
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+cache_dir: "./cache_test_dcgan_uncond"
+image_size: 64
+num_superpixels: 50 # Ignored as use_superpixel_conditioning is false
+num_workers: 0
+device: "cuda" # Change to "cpu" if needed
+debug_num_images: 8
+batch_size: 4
+num_epochs: 1
+
+model:
+  architecture: "dcgan"
+  use_superpixel_conditioning: false
+
+  dcgan_z_dim: 100
+  dcgan_g_feat: 64
+  dcgan_d_feat: 64
+
+optimizer:
+  g_lr: 2.0e-4 # Typical DCGAN LR
+  d_lr: 2.0e-4 # Typical DCGAN LR
+  beta1: 0.5   # Typical DCGAN beta1
+  beta2: 0.999
+
+logging:
+  use_wandb: true
+  wandb_entity: "ciedaniel"
+  wandb_project_name: ${project_name} # Uses project_name from above
+  wandb_run_name: ${run_name}         # Uses run_name from above
+  log_freq_step: 10
+  sample_freq_epoch: 1
+  num_samples_to_log: 8
+  checkpoint_freq_epoch: 1
+
+enable_fid_calculation: false
+resume_checkpoint_path: null
+output_dir_base: "experiment_outputs_tests"
