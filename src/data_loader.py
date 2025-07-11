@@ -8,19 +8,20 @@ from tqdm import tqdm
 
 from src.utils import (
     precompute_superpixels_for_dataset, get_image_paths,
-    ImageToTensor, ResizePIL, normalize_image,
-    convert_image_to_pyg_graph, PYG_AVAILABLE
+    ImageToTensor, ResizePIL, normalize_image
+    # Removed: convert_image_to_pyg_graph, PYG_AVAILABLE
 )
 
-if PYG_AVAILABLE:
-    from torch_geometric.data import Batch as PyGBatch
-    from torch_geometric.data import Data as PyGData
-else:
-    PyGBatch = None
-    PyGData = None
+# Removed PyTorch Geometric imports as ImageToGraphDataset is being removed
+# if PYG_AVAILABLE:
+#     from torch_geometric.data import Batch as PyGBatch
+#     from torch_geometric.data import Data as PyGData
+# else:
+#     PyGBatch = None
+#     PyGData = None
 
 
-class SuperpixelDataset(Dataset):  # For gan5-style models
+class SuperpixelDataset(Dataset):  # For models needing precomputed superpixels, segments, adjacencies
     def __init__(self, image_paths, config, data_split_name="train", transform=None, target_transform=None):
         """
         Args:
@@ -176,189 +177,7 @@ class SuperpixelDataset(Dataset):  # For gan5-style models
             print(f"CRITICAL ERROR in SuperpixelDataset.__getitem__ for {img_path}: {e}. Returning None.")
             return None
 
-
-class ImageToGraphDataset(Dataset):
-    def __init__(self, image_paths, config, data_split_name="train", image_transform=None):
-        if not PYG_AVAILABLE or PyGData is None:
-            raise ImportError("PyTorch Geometric is required for ImageToGraphDataset.")
-
-        self.image_paths = image_paths
-        self.config = config
-        self.data_split_name = data_split_name
-
-        if image_transform is None:
-            self.image_transform = transforms.Compose([
-                ResizePIL((config.image_size, config.image_size)),
-                ImageToTensor(),
-                transforms.Lambda(normalize_image)
-            ])
-        else:
-            self.image_transform = image_transform
-
-        self.graph_cache_dir = os.path.join(
-            config.cache_dir,
-            f"{self.data_split_name}_pyg_graphs_sp{config.model.gan6_num_superpixels}_slic{config.model.gan6_slic_compactness}_is{config.image_size}"
-        )
-        self._prepare_graph_cache()
-
-    def _prepare_graph_cache(self):
-        os.makedirs(self.graph_cache_dir, exist_ok=True)
-        print(f"Using/creating PyG graph cache for {self.data_split_name} at: {self.graph_cache_dir}")
-
-        missing_cache_files = False
-        # Ensure image_paths are populated
-        if not self.image_paths:
-            current_dataset_path = None
-            if self.data_split_name == "train":
-                current_dataset_path = getattr(self.config, 'dataset_path', None)
-            elif self.data_split_name == "val":
-                current_dataset_path = getattr(self.config, 'dataset_path_val', None)
-            elif self.data_split_name == "test":
-                current_dataset_path = getattr(self.config, 'dataset_path_test', None)
-            if current_dataset_path:
-                self.image_paths = get_image_paths(current_dataset_path)
-            if not self.image_paths:  # If still no paths, can't proceed
-                print(
-                    f"Warning: No image paths found for split '{self.data_split_name}' during graph cache preparation.")
-                return  # Or raise error, but returning allows dataloader to be None later
-
-        for img_path in self.image_paths:
-            base_name = os.path.splitext(os.path.basename(img_path))[0]
-            cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
-            if not os.path.exists(cache_file):
-                missing_cache_files = True
-                break
-
-        if missing_cache_files:
-            print(f"Preprocessing images to PyG graphs for caching (split: {self.data_split_name})...")
-            if not self.image_paths:  # Should be populated above, but double check
-                print(f"Error: No image paths to process for graph caching for split '{self.data_split_name}'.")
-                return
-
-            for img_path in tqdm(self.image_paths, desc=f"Caching PyG Graphs ({self.data_split_name})"):
-                base_name = os.path.splitext(os.path.basename(img_path))[0]
-                cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
-                if os.path.exists(cache_file):
-                    continue
-                try:
-                    pil_img = Image.open(img_path).convert("RGB")
-                    pil_resized = pil_img.resize((self.config.image_size, self.config.image_size),
-                                                 Image.BILINEAR)  # TODO: check interpolation consistency
-                    img_np_01 = np.array(pil_resized).astype(np.float32) / 255.0
-                    if img_np_01.ndim == 2:
-                        img_np_01 = np.expand_dims(img_np_01, axis=-1)
-                    if img_np_01.shape[-1] != 3 and img_np_01.shape[-1] == 1:
-                        img_np_01 = np.concatenate([img_np_01] * 3, axis=-1)
-
-                    graph_data = convert_image_to_pyg_graph(
-                        img_np_01,
-                        num_superpixels=self.config.model.gan6_num_superpixels,
-                        slic_compactness=self.config.model.gan6_slic_compactness
-                    )
-                    torch.save(graph_data, cache_file)
-                except Exception as e:
-                    print(f"Error processing and caching graph for {img_path}: {e}")
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        base_name = os.path.splitext(os.path.basename(img_path))[0]
-        graph_cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
-
-        graph_data, real_image_tensor = None, None  # Initialize
-
-        try:
-            # Load cached graph data
-            try:
-                graph_data = torch.load(graph_cache_file)
-            except FileNotFoundError:
-                print(f"ERROR: ImageToGraphDataset - Graph cache file not found for {img_path} at {graph_cache_file}.")
-                return None, None  # Indicate failure
-            except Exception as e:
-                print(
-                    f"ERROR: ImageToGraphDataset - Error loading cached graph data for {img_path} from {graph_cache_file}: {e}")
-                return None, None  # Indicate failure
-
-            # Load image
-            try:
-                pil_img = Image.open(img_path).convert("RGB")
-            except FileNotFoundError:
-                print(f"ERROR: ImageToGraphDataset - Image file not found: {img_path}")
-                return None, None
-            except Exception as e:
-                print(f"ERROR: ImageToGraphDataset - Error loading image {img_path}: {e}")
-                return None, None
-
-            # Transform image
-            if self.image_transform:
-                try:
-                    real_image_tensor = self.image_transform(pil_img)
-                except Exception as e:
-                    print(f"ERROR: ImageToGraphDataset - Error applying image_transform to image {img_path}: {e}")
-                    # This could be where the ResizePIL error (now TypeError) is caught
-                    return None, None
-            else:  # Should always have a transform
-                real_image_tensor = pil_img  # Or handle as error
-
-            if real_image_tensor is None or graph_data is None:
-                print(
-                    f"ERROR: ImageToGraphDataset - Image tensor or graph data is None for {img_path} after processing. Returning (None, None).")
-                return None, None
-
-            return real_image_tensor, graph_data
-
-        except Exception as e:
-            # Catch-all for any unexpected errors within the top-level try for this item
-            print(f"CRITICAL ERROR in ImageToGraphDataset.__getitem__ for {img_path}: {e}. Returning (None, None).")
-            return None, None
-
-
-def collate_graphs(batch):
-    print("DEBUG: collate_graphs CALLED!")
-    if not PYG_AVAILABLE or PyGBatch is None:
-        raise ImportError("PyTorch Geometric is required for collate_graphs.")
-
-    original_batch_size = len(batch)
-    # Filter out items where __getitem__ returned (None, None) or if item itself is None
-    batch = [item for item in batch if item is not None and item[0] is not None and item[1] is not None]
-
-    if not batch:  # If all items in the batch failed or the original batch was empty
-        if original_batch_size > 0:  # Only print warning if there were items to begin with
-            print(
-                f"Warning: collate_graphs - All {original_batch_size} items in batch were invalid (e.g. failed in __getitem__). Returning None for batch.")
-        return None
-
-    # If we reached here, batch contains only valid (real_image_tensor, graph_data) tuples
-    real_images, graph_data_objects = zip(*batch)
-
-    # graph_data_objects should ideally all be valid PyG Data objects now due to the __getitem__ changes.
-    # Stacking images and batching graphs
-    try:
-        stacked_images = torch.stack(real_images)
-        # Ensure graph_data_objects is a list of Data, not tuple of lists etc.
-        batched_graphs = PyGBatch.from_data_list(list(graph_data_objects))
-
-        # Explicitly check the type of batched_graphs
-        if not isinstance(batched_graphs, PyGBatch):
-            print(f"WARNING: collate_graphs - PyGBatch.from_data_list returned an unexpected type or None.")
-            print(f"  Expected type: {PyGBatch}, Actual type: {type(batched_graphs)}, Value: {batched_graphs}")
-            print(f"  Number of items attempted for batching: {len(graph_data_objects)}.")
-            if len(graph_data_objects) > 0:
-                print(f"  Type of first graph object in list: {type(graph_data_objects[0])}")
-            return None # Invalidate batch if graph batching failed or returned wrong type
-
-        return stacked_images, batched_graphs
-    except Exception as e:
-        # This might happen if, despite filtering, some None or incompatible types slipped through,
-        # or if PyGBatch.from_data_list fails with an exception.
-        print(f"ERROR: collate_graphs - Failed to stack images or batch graphs due to exception: {e}. "
-              f"Number of items after filtering: {len(batch)}. "
-              f"First item image type: {type(batch[0][0]) if batch and batch[0] else 'N/A'}, "
-              f"First item graph type: {type(batch[0][1]) if batch and batch[0] else 'N/A'}")
-        return None  # Return None for the batch if collating fails
-
+# Removed ImageToGraphDataset and collate_graphs as gan6_gat_cnn is removed
 
 def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
     print("DEBUG: src.data_loader module loaded and get_dataloader CALLED!")
@@ -393,21 +212,77 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
             image_paths = image_paths[:num_debug]
 
     dataset_type = getattr(config.model, "architecture", "gan5_gcn")
+    use_sp_conditioning = getattr(config.model, "use_superpixel_conditioning", False) # Default to False if not present
     dataset = None
-    collate_fn_to_use = None
+    collate_fn_to_use = None # Default collate_fn will be used if this remains None
 
-    if dataset_type == "gan6_gat_cnn":
-        if not PYG_AVAILABLE:
-            raise ImportError("PyTorch Geometric is required for 'gan6_gat_cnn' architecture but not found.")
-        print(f"Using ImageToGraphDataset for {data_split} (gan6_gat_cnn architecture).")
-        dataset = ImageToGraphDataset(image_paths=image_paths, config=config, data_split_name=data_split)
-        collate_fn_to_use = collate_graphs
-    elif dataset_type == "gan5_gcn":
-        print(f"Using SuperpixelDataset for {data_split} (gan5_gcn architecture).")
-        dataset = SuperpixelDataset(image_paths=image_paths, config=config, data_split_name=data_split)
-        # Default collate_fn is fine for SuperpixelDataset
-    else:
-        raise ValueError(f"Unsupported model.architecture: {dataset_type}")
+    # Architectures that can run in a "standard" (non-superpixel-conditioned) mode
+    standard_gan_architectures = ["dcgan", "stylegan2", "stylegan3", "projected_gan", "histogan"]
+
+    if dataset_type == "gan6_gat_cnn": # This case should no longer be hit as gan6 is removed
+        # Defensive coding: if it's somehow selected, raise error or handle.
+        raise ValueError("'gan6_gat_cnn' architecture is no longer supported.")
+        # if not PYG_AVAILABLE:
+        #     raise ImportError("PyTorch Geometric is required for 'gan6_gat_cnn' architecture but not found.")
+        # print(f"Using ImageToGraphDataset for {data_split} (gan6_gat_cnn architecture).")
+        # dataset = ImageToGraphDataset(image_paths=image_paths, config=config, data_split_name=data_split)
+        # collate_fn_to_use = collate_graphs
+    elif dataset_type == "gan5_gcn": # This case should no longer be hit
+        raise ValueError("'gan5_gcn' architecture is no longer supported.")
+        # # gan5_gcn always needs superpixels, segments, and adj matrix.
+        # print(f"Using SuperpixelDataset for {data_split} (gan5_gcn architecture).")
+        # dataset = SuperpixelDataset(image_paths=image_paths, config=config, data_split_name=data_split)
+    elif dataset_type in standard_gan_architectures:
+        if use_sp_conditioning:
+            # These GANs, when conditioned, will use C1, C2, C4 which rely on superpixel segments
+            # and mean features derived from them. So, SuperpixelDataset is appropriate.
+            print(f"Using SuperpixelDataset for {data_split} ({dataset_type} architecture with superpixel conditioning).")
+            dataset = SuperpixelDataset(image_paths=image_paths, config=config, data_split_name=data_split)
+        else:
+            # Standard GAN mode, no superpixel conditioning. Use the simple ImageDataset.
+            print(f"Using ImageDataset for {data_split} ({dataset_type} architecture without superpixel conditioning).")
+            dataset = ImageDataset(image_paths=image_paths, config=config, data_split_name=data_split)
+    elif dataset_type == "cyclegan":
+        # CycleGAN needs two dataset paths, one for domain A and one for domain B.
+        # These should be specified in the config, e.g., config.dataset_path_A and config.dataset_path_B
+        # For simplicity, we'll assume the main `dataset_path` is for domain A,
+        # and a new `dataset_path_B` is added to config for domain B for the 'train' split.
+        # For 'val' and 'test', similar logic would apply (e.g. config.dataset_path_val_A, config.dataset_path_val_B)
+
+        path_A = None
+        path_B = None
+        if data_split == "train":
+            path_A = config.dataset_path # Main path for domain A
+            path_B = getattr(config, 'dataset_path_B', None)
+        elif data_split == "val":
+            path_A = getattr(config, 'dataset_path_val', None) # Or dataset_path_val_A
+            path_B = getattr(config, 'dataset_path_val_B', None)
+        elif data_split == "test":
+            path_A = getattr(config, 'dataset_path_test', None) # Or dataset_path_test_A
+            path_B = getattr(config, 'dataset_path_test_B', None)
+
+        if not path_A or not path_B:
+            raise ValueError(f"CycleGAN requires two dataset paths (A and B) for split '{data_split}', but one or both are missing in config.")
+
+        image_paths_A = get_image_paths(path_A)
+        image_paths_B = get_image_paths(path_B)
+
+        if not image_paths_A or not image_paths_B:
+            raise ValueError(f"CycleGAN did not find images in one or both dataset paths for split '{data_split}': A='{path_A}', B='{path_B}'")
+
+        # Apply debug_num_images if set (simplified: applies to both A and B)
+        if config.debug_num_images > 0:
+            if config.debug_num_images < len(image_paths_A):
+                image_paths_A = image_paths_A[:config.debug_num_images]
+            if config.debug_num_images < len(image_paths_B):
+                image_paths_B = image_paths_B[:config.debug_num_images]
+
+        print(f"Using UnpairedImageDataset for {data_split} (CycleGAN architecture). Domain A: {len(image_paths_A)} imgs, Domain B: {len(image_paths_B)} imgs.")
+        dataset = UnpairedImageDataset(image_paths_A=image_paths_A, image_paths_B=image_paths_B, config=config, data_split_name=data_split)
+    elif dataset_type != "gan5_gcn" and dataset_type not in standard_gan_architectures and dataset_type != "gan6_gat_cnn": # Defensive check for truly unknown
+        # Fallback or error for unknown architectures
+        raise ValueError(f"Unsupported or unknown model.architecture: {dataset_type} in get_dataloader.")
+
 
     # Determine batch size: use eval_batch_size for val/test if defined, else main batch_size
     current_batch_size = config.batch_size
@@ -428,4 +303,146 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
         collate_fn=collate_fn_to_use
     )
     return dataloader
+
+
+class ImageDataset(Dataset):
+    """
+    A simple dataset to load images from a list of paths.
+    Applies basic transformations like resize and normalization.
+    Returns a dictionary containing the image tensor and its path.
+    """
+    def __init__(self, image_paths, config, data_split_name="train", transform=None):
+        self.image_paths = image_paths
+        self.config = config # Keep the whole config for access to image_size, etc.
+        self.data_split_name = data_split_name
+
+        if transform is None:
+            self.transform = transforms.Compose([
+                ResizePIL((config.image_size, config.image_size)),
+                ImageToTensor(),
+                transforms.Lambda(normalize_image) # Assumes normalize_image is defined in utils
+            ])
+        else:
+            self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        image_tensor = None
+
+        try:
+            # Load image
+            try:
+                image = Image.open(img_path).convert("RGB")
+            except FileNotFoundError:
+                print(f"ERROR: ImageDataset - Image file not found: {img_path}")
+                return None # Indicate failure for this sample
+            except Exception as e:
+                print(f"ERROR: ImageDataset - Error loading image {img_path}: {e}")
+                return None
+
+            # Transform image
+            if self.transform:
+                try:
+                    image_tensor = self.transform(image)
+                except Exception as e:
+                    print(f"ERROR: ImageDataset - Error applying transform to image {img_path}: {e}")
+                    return None
+            else: # Should always have a default transform
+                image_tensor = image # Fallback, though unlikely if default transform is set
+
+            if image_tensor is None:
+                print(f"ERROR: ImageDataset - Image tensor is None for {img_path} after processing. Returning None.")
+                return None
+
+            return {
+                "image": image_tensor,
+                "path": img_path
+                # No segments or adj matrix for this simple dataset
+            }
+
+        except Exception as e:
+            print(f"CRITICAL ERROR in ImageDataset.__getitem__ for {img_path}: {e}. Returning None.")
+            return None
+
+class UnpairedImageDataset(Dataset):
+    """
+    A dataset to load unpaired images from two different domains (A and B).
+    Used for models like CycleGAN.
+    """
+    def __init__(self, image_paths_A, image_paths_B, config, data_split_name="train", transform_A=None, transform_B=None):
+        self.image_paths_A = image_paths_A
+        self.image_paths_B = image_paths_B
+        self.config = config
+        self.data_split_name = data_split_name
+
+        # Define default transforms if none are provided
+        default_transform = transforms.Compose([
+            ResizePIL((config.image_size, config.image_size)),
+            ImageToTensor(),
+            transforms.Lambda(normalize_image)
+        ])
+
+        self.transform_A = transform_A if transform_A is not None else default_transform
+        self.transform_B = transform_B if transform_B is not None else default_transform
+
+        self.len_A = len(self.image_paths_A)
+        self.len_B = len(self.image_paths_B)
+        # The dataset length will be the maximum of the two domains to ensure all images from the smaller domain are seen
+        # when shuffle=True. If shuffle=False, it might iterate through the smaller domain multiple times.
+        self.dataset_length = max(self.len_A, self.len_B)
+
+
+    def __len__(self):
+        return self.dataset_length
+
+    def __getitem__(self, idx):
+        # For unpaired datasets, typically one image is chosen randomly from domain B for each image from domain A (or vice-versa).
+        # Or, if shuffle is True, the indices are already random.
+        # To ensure we use all images from both domains over epochs, especially if they have different sizes:
+        # We use idx % len_A for domain A and idx % len_B for domain B (if shuffle=False).
+        # If shuffle=True, DataLoader shuffles indices from 0 to dataset_length-1.
+        # A common strategy is to pick randomly from the other domain if lengths differ significantly,
+        # or simply wrap around using modulo.
+
+        path_A = self.image_paths_A[idx % self.len_A]
+        # For an unpaired dataset, we want a random image from B for the current image A.
+        # However, to make it deterministic during one pass (especially with num_workers > 0),
+        # it's common to use the main index for one domain and a randomly permuted index for the other,
+        # or simply use idx % len_other_domain.
+        # For true unpaired random sampling per item, __getitem__ would need to be careful with random seeds
+        # if num_workers > 0.
+        # A simpler approach for now: pick images independently based on the (potentially shuffled) index.
+        path_B = self.image_paths_B[random.randint(0, self.len_B - 1)] # Pick a random image from B
+        # Alternative: path_B = self.image_paths_B[idx % self.len_B] (less random pairing but ensures B images are cycled through)
+        # Let's use the random picking from B for more "unpairedness" per batch item.
+
+        try:
+            image_A = Image.open(path_A).convert("RGB")
+            image_B = Image.open(path_B).convert("RGB")
+
+            if self.transform_A:
+                tensor_A = self.transform_A(image_A)
+            if self.transform_B:
+                tensor_B = self.transform_B(image_B)
+
+            return {"A": tensor_A, "B": tensor_B, "path_A": path_A, "path_B": path_B}
+
+        except FileNotFoundError as e:
+            print(f"ERROR: UnpairedImageDataset - Image file not found: {e.filename}. Skipping item.")
+            # Return None or a dict of Nones to be handled by collate_fn if we add one
+            # For now, let's try to return a valid structure with dummy data or skip by returning None
+            # To make collate_fn simpler, if an image fails, it's better if this item is skipped.
+            # The DataLoader's default collate_fn might error if it gets None.
+            # A custom collate_fn that filters Nones is safer.
+            # For now, this will propagate the error if not handled by a custom collate.
+            # Let's return a dict of Nones to be explicit if an error occurs.
+            return {"A": None, "B": None, "path_A": path_A, "path_B": path_B, "error": str(e)}
+        except Exception as e:
+            print(f"CRITICAL ERROR in UnpairedImageDataset.__getitem__ for A:{path_A} or B:{path_B}: {e}")
+            return {"A": None, "B": None, "path_A": path_A, "path_B": path_B, "error": str(e)}
+
+
 # Removed the print("src/data_loader.py created...") as it's an overwrite
