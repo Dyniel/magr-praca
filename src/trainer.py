@@ -2,6 +2,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from tqdm import tqdm
+import torch.nn as nn
 import wandb # Assuming wandb is used for logging, can be made optional
 
 # Project specific imports - these might need adjustment based on actual file structure and names
@@ -234,6 +235,7 @@ class Trainer:
 
                 self.current_iteration +=1 # Increment for each attempted batch
                 current_batch_logs = {} # Renamed from logs to avoid conflict with epoch logs
+
 
                 # --- Prepare inputs for current batch (real images, segments, etc.) ---
                 # This logic is similar to _evaluate_on_split, adapted for training
