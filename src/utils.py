@@ -251,11 +251,20 @@ class ImageToTensor:
 
 class ResizePIL:
     """Resizes a PIL image."""
-    def __init__(self, size, interpolation=Image.BILINEAR):
+    def __init__(self, size, interpolation=Image.BILINEAR): # Ensure PIL.Image is imported as Image
         self.size = size
         self.interpolation = interpolation
 
     def __call__(self, pil_image):
+        if not isinstance(pil_image, Image.Image):
+            # Try to get the path if available (might not be directly in transform context)
+            # This is a best-effort log. The path is more reliably logged in __getitem__.
+            print(f"ERROR: ResizePIL received an invalid object instead of a PIL image. Type: {type(pil_image)}. Object: {str(pil_image)[:100]}")
+            # Option: raise an error here, or return None, or return the object as is.
+            # Returning the object as is will likely cause a downstream error, which is fine for now.
+            # If we returned None, the next transform might fail or handle it.
+            # Raising an error here would be more explicit.
+            raise TypeError(f"ResizePIL expected a PIL.Image.Image object, but got {type(pil_image)}")
         return pil_image.resize(self.size, self.interpolation)
 
 # --- PyTorch Geometric Related Utilities (for gan6 architecture) ---

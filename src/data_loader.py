@@ -112,33 +112,69 @@ class SuperpixelDataset(Dataset):  # For gan5-style models
         base_name = os.path.splitext(os.path.basename(img_path))[0]
         cache_file_path = os.path.join(self.cache_dir, base_name + ".npz")
 
-        try:
-            data = np.load(cache_file_path)
-            segments = torch.from_numpy(data["segments"]).long()
-            adj_matrix = torch.from_numpy(data["adj"]).float()
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Cache file not found for {img_path} at {cache_file_path}. ")
-        except Exception as e:
-            raise RuntimeError(f"Error loading cached data for {img_path}: {e}")
+        image_tensor, segments, adj_matrix = None, None, None  # Initialize
 
         try:
-            image = Image.open(img_path).convert("RGB")
+            # Load cached segments and adjacency matrix
+            try:
+                data = np.load(cache_file_path)
+                segments = torch.from_numpy(data["segments"]).long()
+                adj_matrix = torch.from_numpy(data["adj"]).float()
+            except FileNotFoundError:
+                print(f"ERROR: SuperpixelDataset - Cache file not found for {img_path} at {cache_file_path}.")
+                return None  # Indicate failure for this sample
+            except Exception as e:
+                print(
+                    f"ERROR: SuperpixelDataset - Error loading cached data for {img_path} from {cache_file_path}: {e}")
+                return None  # Indicate failure
+
+            # Load image
+            try:
+                image = Image.open(img_path).convert("RGB")
+            except FileNotFoundError:
+                print(f"ERROR: SuperpixelDataset - Image file not found: {img_path}")
+                return None
+            except Exception as e:
+                print(f"ERROR: SuperpixelDataset - Error loading image {img_path}: {e}")
+                return None
+
+            # Transform image
+            if self.transform:
+                try:
+                    image_tensor = self.transform(image)
+                except Exception as e:
+                    print(f"ERROR: SuperpixelDataset - Error applying transform to image {img_path}: {e}")
+                    # This could be where the ResizePIL error (now TypeError) is caught
+                    return None
+            else:  # Should always have a transform, but as a fallback
+                image_tensor = image  # Or handle as error if transform is mandatory
+
+            # Target transform (usually not used for these)
+            if self.target_transform:
+                try:
+                    segments = self.target_transform(segments)
+                    adj_matrix = self.target_transform(adj_matrix)
+                except Exception as e:
+                    print(f"ERROR: SuperpixelDataset - Error applying target_transform for {img_path}: {e}")
+                    return None
+
+            # Check if any essential component is still None
+            if image_tensor is None or segments is None or adj_matrix is None:
+                print(
+                    f"ERROR: SuperpixelDataset - One or more components are None for {img_path} after processing, returning None.")
+                return None
+
+            return {
+                "image": image_tensor,
+                "segments": segments,
+                "adj": adj_matrix,
+                "path": img_path
+            }
+
         except Exception as e:
-            raise RuntimeError(f"Error loading image {img_path}: {e}")
-
-        if self.transform:
-            image_tensor = self.transform(image)
-
-        if self.target_transform:  # Should not be used typically
-            segments = self.target_transform(segments)
-            adj_matrix = self.target_transform(adj_matrix)
-
-        return {
-            "image": image_tensor,
-            "segments": segments,
-            "adj": adj_matrix,
-            "path": img_path
-        }
+            # Catch-all for any unexpected errors within the top-level try for this item
+            print(f"CRITICAL ERROR in SuperpixelDataset.__getitem__ for {img_path}: {e}. Returning None.")
+            return None
 
 
 class ImageToGraphDataset(Dataset):
@@ -231,49 +267,86 @@ class ImageToGraphDataset(Dataset):
         base_name = os.path.splitext(os.path.basename(img_path))[0]
         graph_cache_file = os.path.join(self.graph_cache_dir, f"{base_name}.pt")
 
+        graph_data, real_image_tensor = None, None  # Initialize
+
         try:
-            graph_data = torch.load(graph_cache_file)
+            # Load cached graph data
+            try:
+                graph_data = torch.load(graph_cache_file)
+            except FileNotFoundError:
+                print(f"ERROR: ImageToGraphDataset - Graph cache file not found for {img_path} at {graph_cache_file}.")
+                return None, None  # Indicate failure
+            except Exception as e:
+                print(
+                    f"ERROR: ImageToGraphDataset - Error loading cached graph data for {img_path} from {graph_cache_file}: {e}")
+                return None, None  # Indicate failure
+
+            # Load image
+            try:
+                pil_img = Image.open(img_path).convert("RGB")
+            except FileNotFoundError:
+                print(f"ERROR: ImageToGraphDataset - Image file not found: {img_path}")
+                return None, None
+            except Exception as e:
+                print(f"ERROR: ImageToGraphDataset - Error loading image {img_path}: {e}")
+                return None, None
+
+            # Transform image
+            if self.image_transform:
+                try:
+                    real_image_tensor = self.image_transform(pil_img)
+                except Exception as e:
+                    print(f"ERROR: ImageToGraphDataset - Error applying image_transform to image {img_path}: {e}")
+                    # This could be where the ResizePIL error (now TypeError) is caught
+                    return None, None
+            else:  # Should always have a transform
+                real_image_tensor = pil_img  # Or handle as error
+
+            if real_image_tensor is None or graph_data is None:
+                print(
+                    f"ERROR: ImageToGraphDataset - Image tensor or graph data is None for {img_path} after processing. Returning (None, None).")
+                return None, None
+
+            return real_image_tensor, graph_data
+
         except Exception as e:
-            raise RuntimeError(f"Error loading cached graph data for {img_path} from {graph_cache_file}: {e}")
-
-        pil_img = Image.open(img_path).convert("RGB")
-        real_image_tensor = self.image_transform(pil_img)
-
-        return real_image_tensor, graph_data
+            # Catch-all for any unexpected errors within the top-level try for this item
+            print(f"CRITICAL ERROR in ImageToGraphDataset.__getitem__ for {img_path}: {e}. Returning (None, None).")
+            return None, None
 
 
 def collate_graphs(batch):
     if not PYG_AVAILABLE or PyGBatch is None:
         raise ImportError("PyTorch Geometric is required for collate_graphs.")
 
-    # Filter out None items that could result from __getitem__ failing before returning a tuple
-    # This can happen if an image is corrupted or a cache file is bad for a single item.
-    # However, __getitem__ in this class raises RuntimeError on load failure, so batch should be clean.
-    # But if an image_path was problematic and _prepare_graph_cache skipped it, it might lead here.
-    # For robustness, filter None items from batch if they can occur.
-    # batch = [item for item in batch if item is not None and item[1] is not None]
-    # if not batch: return None # If all items failed
+    original_batch_size = len(batch)
+    # Filter out items where __getitem__ returned (None, None) or if item itself is None
+    batch = [item for item in batch if item is not None and item[0] is not None and item[1] is not None]
 
+    if not batch:  # If all items in the batch failed or the original batch was empty
+        if original_batch_size > 0:  # Only print warning if there were items to begin with
+            print(
+                f"Warning: collate_graphs - All {original_batch_size} items in batch were invalid (e.g. failed in __getitem__). Returning None for batch.")
+        return None
+
+    # If we reached here, batch contains only valid (real_image_tensor, graph_data) tuples
     real_images, graph_data_objects = zip(*batch)
-    valid_graphs = [g for g in graph_data_objects if g is not None]
 
-    if len(valid_graphs) != len(graph_data_objects):
-        print(
-            f"Warning: Some graph data objects were None. Found {len(valid_graphs)} valid graphs out of {len(graph_data_objects)}.")
-        if not valid_graphs:  # All graphs were None
-            return None  # Or handle differently, e.g. return empty tensors / special batch
-
-    # If after filtering, valid_graphs is empty but real_images might not be (if some graphs failed)
-    # This would cause PyGBatch.from_data_list to fail if valid_graphs is empty.
-    if not valid_graphs:
-        # This case should ideally be handled by ensuring all data is processable or by
-        # more sophisticated error handling in __getitem__ or _prepare_graph_cache.
-        # For now, if no valid graphs, we can't form a batch.
-        # Consider returning None or an empty structure that the training loop can skip.
-        print("Warning: No valid graphs in batch after filtering. Skipping batch.")
-        return None  # This will need to be handled by the training loop
-
-    return torch.stack(real_images), PyGBatch.from_data_list(valid_graphs)
+    # graph_data_objects should ideally all be valid PyG Data objects now due to the __getitem__ changes.
+    # Stacking images and batching graphs
+    try:
+        stacked_images = torch.stack(real_images)
+        # Ensure graph_data_objects is a list of Data, not tuple of lists etc.
+        batched_graphs = PyGBatch.from_data_list(list(graph_data_objects))
+        return stacked_images, batched_graphs
+    except Exception as e:
+        # This might happen if, despite filtering, some None or incompatible types slipped through,
+        # or if PyGBatch.from_data_list fails.
+        print(f"ERROR: collate_graphs - Failed to stack images or batch graphs: {e}. "
+              f"Number of items after filtering: {len(batch)}. "
+              f"First item image type: {type(batch[0][0]) if batch and batch[0] else 'N/A'}, "
+              f"First item graph type: {type(batch[0][1]) if batch and batch[0] else 'N/A'}")
+        return None  # Return None for the batch if collating fails
 
 
 def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
