@@ -54,9 +54,9 @@ gradient_accumulation_steps: 1 # Increase to trade computation for memory (effec
 # --- Logging and Evaluation ---
 logging:
   use_wandb: True
-  # wandb_project_name: "MyCustomWandBProject" # Override if needed, else defaults to project_name
-  # wandb_run_name: "MyAmazingExperimentRun" # Override if needed, else defaults to run_name
-  # wandb_entity: "your_wandb_entity_here" # IMPORTANT: Set your W&B entity
+  wandb_project_name: "SuperpixelGAN_LungSCC_Experiment2" # Override if needed, else defaults to project_name
+  wandb_run_name: "MyAmazingExperimentRun" # Override if needed, else defaults to run_name
+  wandb_entity: "ciedaniel" # IMPORTANT: Set your W&B entity
   wandb_watch_freq_g: 1000 # Default, can override
   wandb_watch_freq_d: 1000 # Default, can override
   log_freq_step: 50

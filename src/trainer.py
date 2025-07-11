@@ -2,6 +2,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from tqdm import tqdm
+import torch.nn as nn
 import wandb # Assuming wandb is used for logging, can be made optional
 
 # Project specific imports - these might need adjustment based on actual file structure and names
@@ -74,14 +75,16 @@ class Trainer:
             # self.imagenet_norm = ...
 
         # WandB watch calls (moved after G and D are initialized in _init_models)
-        if hasattr(self.config, 'logging') and self.config.logging.use_wandb and self.config.logging.wandb_project_name:
-            if hasattr(self, 'G') and self.G is not None:
-                 wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
-            if hasattr(self, 'D') and self.D is not None:
-                 wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
-        elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback
-             if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all")
-             if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
+        # Only call wandb.watch if wandb.init was successful (i.e., wandb.run is not None)
+        if wandb.run is not None:
+            if hasattr(self.config, 'logging'): # Check if logging config exists
+                if hasattr(self, 'G') and self.G is not None:
+                    wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
+                if hasattr(self, 'D') and self.D is not None:
+                    wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
+            elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback for older config structure
+                 if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all")
+                 if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
 
 
     def _init_models(self):
