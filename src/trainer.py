@@ -258,12 +258,12 @@ class Trainer:
                     real_images_gan_norm = raw_batch_data.to(self.device)
 
                 if real_images_gan_norm is None:
-                        print(f"Warning: Could not extract real images for training batch (arch: {self.model_architecture}, type: {type(raw_batch_data)}). Skipping.")
-                        continue
-                    current_batch_size = real_images_gan_norm.size(0)
-                    if current_batch_size == 0: continue
+                    print(f"Warning: Could not extract real images for training batch (arch: {self.model_architecture}, type: {type(raw_batch_data)}). Skipping.")
+                    continue
+                current_batch_size = real_images_gan_norm.size(0)
+                if current_batch_size == 0: continue
 
-                    # Superpixel conditioning data prep (for non-CycleGAN)
+                # Superpixel conditioning data prep (for non-CycleGAN)
                     spatial_map_g, spatial_map_d, z_superpixel_g = None, None, None
                     g_spatial_active = getattr(self.config.model, f"{self.model_architecture}_g_spatial_cond", False)
                     d_spatial_active = getattr(self.config.model, f"{self.model_architecture}_d_spatial_cond", False)
