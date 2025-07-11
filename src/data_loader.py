@@ -219,9 +219,17 @@ class ImageToGraphDataset(Dataset):
                         num_superpixels=self.config.model.gan6_num_superpixels,
                         slic_compactness=self.config.model.gan6_slic_compactness
                     )
+
+                    if graph_data is None or (hasattr(graph_data, 'num_nodes') and graph_data.num_nodes == 0):
+                        print(f"Warning: Graph creation failed or resulted in an empty graph for {img_path}. Skipping caching for this image.")
+                        # Optionally, log this to a file of problematic images
+                        continue # Do not save this cache file
+
                     torch.save(graph_data, cache_file)
+                except ImportError as e: # Specific errors that should stop execution
+                    raise e
                 except Exception as e:
-                    print(f"Error processing and caching graph for {img_path}: {e}")
+                    print(f"Error processing and caching graph for {img_path}: {e}. Skipping this image.")
 
     def __len__(self):
         return len(self.image_paths)

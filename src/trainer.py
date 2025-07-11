@@ -24,22 +24,41 @@ from src.utils import (
 
 
 class Trainer:
-    def __init__(self, config):
-        self.config = config
-        # Updated device selection logic
-        if config.device == "cuda" and not torch.cuda.is_available():
+    def __init__(self, config): # Parameter name changed back to config
+        # Log the OmegaConf object passed as 'config'
+        if hasattr(config, 'logging') and config.logging.use_wandb and config.logging.wandb_project_name:
+            wandb.init(
+                project=config.logging.wandb_project_name,
+                entity=config.logging.wandb_entity,
+                name=config.logging.wandb_run_name,
+                config=OmegaConf.to_container(config, resolve=True) # Log the original OmegaConf
+            )
+        elif hasattr(config, 'use_wandb') and config.use_wandb: # Fallback
+            print("Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
+            wandb.init(
+                project=getattr(config, 'wandb_project_name', 'default_project'),
+                name=getattr(config, 'wandb_run_name', 'default_run'),
+                config=OmegaConf.to_container(config, resolve=True)
+            )
+
+        # Convert the incoming OmegaConf 'config' object to the actual BaseConfig dataclass instance for internal use
+        # This instance will be stored in self.config, shadowing the parameter name, which is fine.
+        self.config = OmegaConf.to_object(config)
+
+        # Updated device selection logic using the dataclass instance self.config
+        if self.config.device == "cuda" and not torch.cuda.is_available():
             print("CUDA specified in config but not available. Falling back to CPU.")
             self.device = torch.device("cpu")
         else:
-            self.device = torch.device(config.device)
+            self.device = torch.device(self.config.device)
 
         print(f"Using device: {self.device}")
 
-        self.model_architecture = config.model.architecture
+        self.model_architecture = self.config.model.architecture
         self.current_epoch = 0
         self.current_iteration = 0
 
-        # Initialize models, optimizers, loss functions based on config
+        # Initialize models, optimizers, loss functions based on self.config (which is now BaseConfig instance)
         self._init_models()
         self._init_optimizers()
         self._init_loss_functions()
@@ -47,40 +66,24 @@ class Trainer:
         # For ProjectedGAN feature matching
         if self.model_architecture == "projected_gan":
             self.feature_extractor = FeatureExtractor(
-                model_name=config.model.projectedgan_feature_extractor_model,
-                layers_to_extract=config.model.projectedgan_feature_extractor_layers, # This needs to be a dict in config
+                model_name=self.config.model.projectedgan_feature_extractor_model,
+                layers_to_extract=self.config.model.projectedgan_feature_extractor_layers,
                 pretrained=True,
                 requires_grad=False
             ).to(self.device).eval()
-            # Normalization for images passed to feature_extractor
-            # This typically uses ImageNet mean and std.
-            # Example: transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            # For simplicity, assuming self.imagenet_norm will be defined or handled if needed.
             # self.imagenet_norm = ...
 
-        # WandB initialization using the new logging config structure
-        if hasattr(self.config, 'logging') and self.config.logging.use_wandb and self.config.logging.wandb_project_name:
-            wandb.init(
-                project=self.config.logging.wandb_project_name,
-                entity=self.config.logging.wandb_entity,
-                name=self.config.logging.wandb_run_name, # Use run_name from logging config
-                config=OmegaConf.to_container(config, resolve=True) # Log the whole config
-            )
-            # Check if G and D exist before watching
-            if hasattr(self, 'G') and self.G is not None:
-                 wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
-            if hasattr(self, 'D') and self.D is not None:
-                 wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
-        elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback for old direct attributes if logging object is missing
-            print("Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
-            # This part is a fallback and ideally should not be triggered if config is correct
-            wandb.init(
-                project=getattr(self.config, 'wandb_project_name', 'default_project'),
-                name=getattr(self.config, 'wandb_run_name', 'default_run'),
-                config=OmegaConf.to_container(config, resolve=True)
-            )
-            if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all") # log_freq might be missing
-            if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
+        # WandB watch calls (moved after G and D are initialized in _init_models)
+        # Only call wandb.watch if wandb.init was successful (i.e., wandb.run is not None)
+        if wandb.run is not None:
+            if hasattr(self.config, 'logging'): # Check if logging config exists
+                if hasattr(self, 'G') and self.G is not None:
+                    wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
+                if hasattr(self, 'D') and self.D is not None:
+                    wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
+            elif hasattr(self.config, 'use_wandb') and self.config.use_wandb: # Fallback for older config structure
+                 if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all")
+                 if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
 
 
     def _init_models(self):
@@ -214,9 +217,23 @@ class Trainer:
 
             # Corrected: self.config.num_epochs instead of self.config.training.epochs
             batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{self.config.num_epochs}")
+
+            epoch_losses_d_adv = []
+            epoch_losses_d_r1 = []
+            epoch_losses_d_total = []
+            epoch_losses_g_adv = []
+            epoch_losses_g_feat = []
+            epoch_losses_g_total = []
+            processed_batches_in_epoch = 0
+
             for batch_idx, raw_batch_data in enumerate(batch_iterator):
-                self.current_iteration +=1
-                logs = {}
+                if raw_batch_data is None:
+                    print(f"Warning: Trainer received a None batch from dataloader at training iteration {self.current_iteration} (epoch {epoch+1}, batch_idx {batch_idx}). Skipping batch.")
+                    # self.current_iteration is incremented per batch attempt later, so don't double count here unless strictly iteration based
+                    continue
+
+                self.current_iteration +=1 # Increment for each attempted batch
+                current_batch_logs = {} # Renamed from logs to avoid conflict with epoch logs
 
                 # --- Prepare inputs for current batch (real images, segments, etc.) ---
                 # This logic is similar to _evaluate_on_split, adapted for training
@@ -304,123 +321,161 @@ class Trainer:
                 d_fake_logits = self.D(fake_images.detach(), spatial_map_d=spatial_map_d) # Pass spatial_map_d also for fake if D is conditioned
 
                 # Discriminator loss
+                lossD_adv_val = 0
+                lossD_r1_val = 0
                 if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
-                    lossD = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits) # Assuming similar loss structure
-                else: # dcgan, gan5, gan6
+                    lossD = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
+                else:
                     lossD = self.loss_fn_d(d_real_logits, d_fake_logits)
-                logs["Loss_D_Adv"] = lossD.item()
+                lossD_adv_val = lossD.item()
+                current_batch_logs["Loss_D_Adv"] = lossD_adv_val
 
-                # R1 gradient penalty (common for StyleGANs, can be added to others)
                 if self.r1_gamma > 0:
                     r1_penalty = compute_grad_penalty(d_real_logits, real_images_gan_norm) * self.r1_gamma / 2
                     lossD += r1_penalty
-                    logs["Loss_D_R1"] = r1_penalty.item()
+                    lossD_r1_val = r1_penalty.item()
+                    current_batch_logs["Loss_D_R1"] = lossD_r1_val
+
+                lossD_total_val = lossD.item()
+                current_batch_logs["Loss_D_Total"] = lossD_total_val
+
+                epoch_losses_d_adv.append(lossD_adv_val)
+                if self.r1_gamma > 0: epoch_losses_d_r1.append(lossD_r1_val) # Only append if calculated
+                epoch_losses_d_total.append(lossD_total_val)
 
                 lossD.backward()
                 self.optimizer_D.step()
-                logs["Loss_D_Total"] = lossD.item()
-                toggle_grad(self.D, False) # Freeze D for G training
-
+                toggle_grad(self.D, False)
 
                 # --- Train Generator ---
-                # Potentially less frequent G updates
-                # Corrected: self.config.d_updates_per_g_update instead of self.config.training.g_steps_per_d_step
+                lossG_adv_val = 0
+                lossG_feat_val = 0
+                lossG_total_val = 0
+
                 if self.current_iteration % self.config.d_updates_per_g_update == 0:
                     toggle_grad(self.G, True)
                     if self.E: toggle_grad(self.E, True)
                     if self.sp_latent_encoder: toggle_grad(self.sp_latent_encoder, True)
                     self.optimizer_G.zero_grad()
 
-                    # Regenerate fake images with G grads enabled
-                    # Noise and G args should be same as above for consistency in this step, or resampled
                     z_noise_g = torch.randn(current_batch_size, self.config.model.get(f"{self.model_architecture}_z_dim", self.config.model.z_dim), device=self.device)
                     g_args_g = [z_noise_g]
-                    g_kwargs_g = {} # Reset kwargs for G training pass
+                    g_kwargs_g = {}
                     if self.model_architecture == "gan5_gcn":
-                        g_args_g.extend([real_images_gan_norm, segments_map, adj_matrix]) # Use same conditioning as D saw
+                        g_args_g.extend([real_images_gan_norm, segments_map, adj_matrix])
                     elif self.model_architecture == "gan6_gat_cnn":
-                         # Recompute E output if E is part of G's parameters
-                        z_graph_g = self.E(graph_batch_pyg) if self.E else torch.zeros(...) # Handle no E case
+                        z_graph_g = self.E(graph_batch_pyg) if self.E else torch.zeros((current_batch_size, self.config.model.gan6_z_dim_graph_encoder_output), device=self.device)
                         if self.config.model.gan6_gat_cnn_use_null_graph_embedding and self.E: z_graph_g = torch.zeros_like(z_graph_g)
                         g_args_g = [z_graph_g, current_batch_size]
                     elif self.model_architecture in ["dcgan", "stylegan2", "stylegan3", "projected_gan"]:
                         g_kwargs_g['spatial_map_g'] = spatial_map_g
-                        g_kwargs_g['z_superpixel_g'] = z_superpixel_g # Use same z_superpixel_g derived from reals
+                        g_kwargs_g['z_superpixel_g'] = z_superpixel_g
                         if self.model_architecture in ["stylegan2", "projected_gan"]:
                             g_kwargs_g['style_mix_prob'] = self.config.model.get('stylegan2_style_mix_prob', 0.9)
 
                     fake_images_for_g = self.G(*g_args_g, **g_kwargs_g)
-                    d_fake_logits_for_g = self.D(fake_images_for_g, spatial_map_d=spatial_map_d) # Pass spatial_map_d if D conditioned
+                    d_fake_logits_for_g = self.D(fake_images_for_g, spatial_map_d=spatial_map_d)
 
                     if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
                         lossG_adv = self.loss_fn_g_stylegan2(d_fake_logits_for_g)
                     else:
                         lossG_adv = self.loss_fn_g(d_fake_logits_for_g)
-                    logs["Loss_G_Adv"] = lossG_adv.item()
+                    lossG_adv_val = lossG_adv.item()
+                    current_batch_logs["Loss_G_Adv"] = lossG_adv_val
                     lossG = lossG_adv
 
-                    # ProjectedGAN: Feature Matching Loss
                     if self.model_architecture == "projected_gan":
-                        # Normalize real and fake images for feature extractor
-                        # Assuming denormalize_image brings to [0,1] range
                         real_01 = denormalize_image(real_images_gan_norm)
                         fake_01 = denormalize_image(fake_images_for_g)
-                        # Apply ImageNet normalization (or whatever FeatureExtractor expects)
-                        # This needs self.imagenet_norm to be defined (e.g., torchvision.transforms.Normalize)
-                        # real_im_norm_fe = self.imagenet_norm(real_01)
-                        # fake_im_norm_fe = self.imagenet_norm(fake_01)
-                        # For now, assuming feature_extractor can handle [0,1] or [-1,1] directly, or this is added:
-                        # This is a simplification. Proper normalization is crucial.
-                        real_feats_dict = self.feature_extractor(real_01) # Pass real_im_norm_fe
-                        fake_feats_dict = self.feature_extractor(fake_01) # Pass fake_im_norm_fe
+                        real_feats_dict = self.feature_extractor(real_01)
+                        fake_feats_dict = self.feature_extractor(fake_01)
+                        lossG_feat_single_batch = 0.0 # Initialize as float
+                        temp_loss_val = 0.0
+                        for key_idx, key in enumerate(real_feats_dict):
+                             # Ensure features are tensors before loss calculation
+                            if isinstance(fake_feats_dict[key], torch.Tensor) and isinstance(real_feats_dict[key], torch.Tensor):
+                                temp_loss_val += self.loss_fn_g_feat_match(fake_feats_dict[key], real_feats_dict[key].detach())
+                        if isinstance(temp_loss_val, torch.Tensor): # if it became a tensor
+                            lossG_feat_single_batch = temp_loss_val.item()
+                        else: # if it remained float (e.g. no features)
+                            lossG_feat_single_batch = temp_loss_val
 
-                        lossG_feat = 0.0
-                        for key in real_feats_dict: # Iterate over features from different layers
-                            lossG_feat += self.loss_fn_g_feat_match(fake_feats_dict[key], real_feats_dict[key].detach())
-                        lossG += self.config.model.projectedgan_feature_matching_loss_weight * lossG_feat
-                        logs["Loss_G_FeatMatch"] = lossG_feat.item() if isinstance(lossG_feat, torch.Tensor) else lossG_feat
+                        lossG += self.config.model.projectedgan_feature_matching_loss_weight * temp_loss_val # temp_loss_val is tensor or float
+                        lossG_feat_val = lossG_feat_single_batch # Already .item() or float
+                        current_batch_logs["Loss_G_FeatMatch"] = lossG_feat_val
 
+                    lossG_total_val = lossG.item() # This should be after all additions to lossG
+                    current_batch_logs["Loss_G_Total"] = lossG_total_val
+
+                    epoch_losses_g_adv.append(lossG_adv_val)
+                    if self.model_architecture == "projected_gan": epoch_losses_g_feat.append(lossG_feat_val)
+                    epoch_losses_g_total.append(lossG_total_val)
 
                     lossG.backward()
                     self.optimizer_G.step()
-                    logs["Loss_G_Total"] = lossG.item()
 
                     toggle_grad(self.G, False)
                     if self.E: toggle_grad(self.E, False)
                     if self.sp_latent_encoder: toggle_grad(self.sp_latent_encoder, False)
 
+                processed_batches_in_epoch += 1
 
-                # Logging
-                # Corrected: Check for logging attribute and use self.config.logging.*
+                # Per-step logging
                 if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.log_freq_step == 0:
-                    batch_iterator.set_postfix(logs)
-                    if self.config.logging.use_wandb:
-                        wandb.log(logs, step=self.current_iteration)
-                elif self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0: # Fallback
-                    batch_iterator.set_postfix(logs)
-                    if getattr(self.config, 'use_wandb', False):
-                         wandb.log(logs, step=self.current_iteration)
+                    batch_iterator.set_postfix(current_batch_logs)
+                    if self.config.logging.use_wandb and wandb.run:
+                        wandb.log(current_batch_logs, step=self.current_iteration)
+                elif self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0:
+                    batch_iterator.set_postfix(current_batch_logs)
+                    if getattr(self.config, 'use_wandb', False) and wandb.run:
+                         wandb.log(current_batch_logs, step=self.current_iteration)
 
+            # --- End of Epoch ---
+            if processed_batches_in_epoch > 0:
+                epoch_summary_logs = {"epoch": epoch + 1}
+                # Calculate means, ensuring lists are not empty to avoid division by zero if using np.mean directly
+                if epoch_losses_d_total: epoch_summary_logs["train_epoch/Loss_D_Total"] = sum(epoch_losses_d_total) / len(epoch_losses_d_total)
+                if epoch_losses_d_adv: epoch_summary_logs["train_epoch/Loss_D_Adv"] = sum(epoch_losses_d_adv) / len(epoch_losses_d_adv)
+                if epoch_losses_d_r1: epoch_summary_logs["train_epoch/Loss_D_R1"] = sum(epoch_losses_d_r1) / len(epoch_losses_d_r1)
 
-                # Evaluation and Checkpointing
-                # Corrected: Check for logging attribute and use self.config.logging.*
-                if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.sample_freq_epoch == 0:
-                    eval_metrics = self._evaluate_on_split("val")
-                    if self.config.logging.use_wandb and eval_metrics:
+                if epoch_losses_g_total: epoch_summary_logs["train_epoch/Loss_G_Total"] = sum(epoch_losses_g_total) / len(epoch_losses_g_total)
+                if epoch_losses_g_adv: epoch_summary_logs["train_epoch/Loss_G_Adv"] = sum(epoch_losses_g_adv) / len(epoch_losses_g_adv)
+                if epoch_losses_g_feat: epoch_summary_logs["train_epoch/Loss_G_FeatMatch"] = sum(epoch_losses_g_feat) / len(epoch_losses_g_feat)
+
+                print(f"\n--- Epoch {epoch+1}/{self.config.num_epochs} Summary (Train) ---")
+                for key, value in epoch_summary_logs.items():
+                    if key != "epoch": print(f"{key}: {value:.4f}")
+
+                if hasattr(self.config, 'logging') and self.config.logging.use_wandb and wandb.run:
+                    wandb.log(epoch_summary_logs, step=self.current_iteration)
+            else:
+                print(f"Epoch {epoch+1}: No batches were processed. Skipping epoch summary logging for training.")
+
+            # Evaluation (e.g., on validation set), sample logging, and checkpointing
+            # These are typically done at the end of an epoch or every N epochs.
+            if hasattr(self.config, 'logging'):
+                # Log samples and validation metrics if sample_freq_epoch is met (e.g., every N epochs)
+                if self.config.logging.sample_freq_epoch > 0 and (epoch + 1) % self.config.logging.sample_freq_epoch == 0:
+                    eval_metrics = self._evaluate_on_split("val") # Assuming this handles its own sample logging to wandb
+                    if self.config.logging.use_wandb and wandb.run and eval_metrics:
+                         # eval_metrics from _evaluate_on_split already have "val/" prefix
                         wandb.log(eval_metrics, step=self.current_iteration)
 
-                    if epoch % self.config.logging.checkpoint_freq_epoch == 0 and batch_idx == len(train_dataloader) -1 :
-                        self.save_checkpoint(epoch=self.current_epoch, is_best=False)
-                elif self.current_iteration % getattr(self.config, 'sample_freq_epoch', 1) == 0: # Fallback
-                    eval_metrics = self._evaluate_on_split("val")
-                    if getattr(self.config, 'use_wandb', False) and eval_metrics:
-                        wandb.log(eval_metrics, step=self.current_iteration)
-                    if epoch % getattr(self.config, 'checkpoint_freq_epoch', 10) == 0 and batch_idx == len(train_dataloader) -1 :
-                        self.save_checkpoint(epoch=self.current_epoch, is_best=False)
+                # Checkpointing
+                if (epoch + 1) % self.config.logging.checkpoint_freq_epoch == 0 :
+                    self.save_checkpoint(epoch=self.current_epoch, iteration=self.current_iteration, is_best=False)
+            # Fallback checkpointing if logging object not fully configured
+            elif (epoch + 1) % getattr(self.config, 'checkpoint_freq_epoch', 10) == 0:
+                self.save_checkpoint(epoch=self.current_epoch, iteration=self.current_iteration, is_best=False)
 
+            # FID Calculation
+            if self.config.enable_fid_calculation and (epoch + 1) % self.config.fid_freq_epoch == 0:
+                print(f"Epoch {epoch+1}: FID calculation would occur here (not yet implemented).")
+                # fid_score = self.calculate_fid()
+                # if fid_score is not None and hasattr(self.config, 'logging') and self.config.logging.use_wandb and wandb.run:
+                #     wandb.log({"val/FID_Score": fid_score}, step=self.current_iteration)
 
-            # End of epoch
-            print(f"Epoch {epoch+1} completed.")
+            print(f"--- Epoch {epoch+1} processing completed. ---")
 
         print("Training finished.")
         # Corrected: Check for logging attribute and use self.config.logging.use_wandb
@@ -456,7 +511,11 @@ class Trainer:
         num_batches = 0
 
         with torch.no_grad():
-            for raw_batch_data in tqdm(eval_dataloader, desc=f"Evaluating {data_split}"):
+            for batch_idx, raw_batch_data in enumerate(tqdm(eval_dataloader, desc=f"Evaluating {data_split}")):
+                if raw_batch_data is None:
+                    print(f"Warning: Trainer received a None batch from dataloader during {data_split} evaluation (batch_idx {batch_idx}). Skipping batch.")
+                    continue
+
                 # Initialize batch losses/metrics to tensor(0.0) on correct device
                 lossD_batch = torch.tensor(0.0, device=self.device)
                 lossG_batch = torch.tensor(0.0, device=self.device)
