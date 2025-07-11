@@ -13,15 +13,15 @@ from src.models import (
     StyleGAN2Generator, StyleGAN2Discriminator,
     StyleGAN3Generator, StyleGAN3Discriminator,  # Assuming these exist
     ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor,  # Assuming these exist
-    SuperpixelLatentEncoder  # CycleGANGenerator, CycleGANDiscriminator removed from imports
+    SuperpixelLatentEncoder # CycleGANGenerator, CycleGANDiscriminator removed from imports
 )
-from src.augmentations import ADAManager  # Import ADAManager
+from src.augmentations import ADAManager # Import ADAManager
 from src.data_loader import get_dataloader
 from src.utils import (
     denormalize_image, generate_spatial_superpixel_map, calculate_mean_superpixel_features,
     toggle_grad, compute_grad_penalty  # R1 gradient penalty
 )
-from src.losses import HistogramLoss  # Import HistogramLoss
+from src.losses import HistogramLoss # Import HistogramLoss
 
 
 # Add other necessary loss functions or utilities
@@ -63,20 +63,18 @@ class Trainer:
         self.model_architecture = self.config.model.architecture
         self.current_epoch = 0
         self.current_iteration = 0
-        self.ada_manager = None  # Initialize to None
+        self.ada_manager = None # Initialize to None
 
         # Initialize models, optimizers, loss functions based on self.config (which is now BaseConfig instance)
-        self._init_models()  # This will also init self.ada_manager if applicable
+        self._init_models() # This will also init self.ada_manager if applicable
         self._init_optimizers()
         self._init_loss_functions()
 
         # For ProjectedGAN feature matching
         if self.model_architecture == "projected_gan":
             self.feature_extractor = FeatureExtractor(
-                model_name=self.config.model.projectedgan_feature_extractor_model,
-                # Corrected: was projectedgan_feature_extractor_name
-                layers_to_extract=self.config.model.projectedgan_feature_layers_to_extract,
-                # Corrected: was projectedgan_feature_extractor_layers
+                model_name=self.config.model.projectedgan_feature_extractor_model, # Corrected: was projectedgan_feature_extractor_name
+                layers_to_extract=self.config.model.projectedgan_feature_layers_to_extract, # Corrected: was projectedgan_feature_extractor_layers
                 pretrained=True,
                 requires_grad=False
             ).to(self.device).eval()
@@ -84,9 +82,10 @@ class Trainer:
 
         # Initialize ADAManager if StyleGAN2 and ADA is configured
         if self.model_architecture == "stylegan2" and \
-                hasattr(self.config.model, 'stylegan2_ada_target_metric_val'):  # Check for a key ADA param
+           hasattr(self.config.model, 'stylegan2_ada_target_metric_val'): # Check for a key ADA param
             print("Initializing ADAManager for StyleGAN2.")
             self.ada_manager = ADAManager(self.config.model, self.device)
+
 
         # WandB watch calls (moved after G and D are initialized in _init_models)
         # Only call wandb.watch if wandb.init was successful (i.e., wandb.run is not None)
@@ -122,8 +121,8 @@ class Trainer:
             self.G = ProjectedGANGenerator(self.config).to(self.device)
             self.D = ProjectedGANDiscriminator(self.config).to(self.device)
             self.E = None
-        # Removed CycleGAN block from _init_models
-        elif self.model_architecture == "histogan":  # HistoGAN uses StyleGAN2 backbone
+
+        elif self.model_architecture == "histogan": # HistoGAN uses StyleGAN2 backbone
             self.G = StyleGAN2Generator(self.config).to(self.device)
             self.D = StyleGAN2Discriminator(self.config).to(self.device)
             self.E = None # No separate encoder for HistoGAN in this context
@@ -152,7 +151,7 @@ class Trainer:
 
     def _init_optimizers(self):
         g_params = list(self.G.parameters())
-        if self.E: g_params += list(self.E.parameters())  # For gan6 E (now removed) or other future E
+        if self.E: g_params += list(self.E.parameters()) # For gan6 E (now removed) or other future E
         if self.sp_latent_encoder: g_params += list(self.sp_latent_encoder.parameters())
 
         # Removed CycleGAN specific optimizer initialization
@@ -202,46 +201,39 @@ class Trainer:
             ).to(self.device)
             print(f"HistoGAN Histogram Loss initialized: bins={self.config.model.histogan_histogram_bins}, type={self.config.model.histogan_histogram_loss_type}")
 
-
         else:
-            # For StyleGAN2, d_input_real_images might be augmented
-            d_real_logits = self.D(d_input_real_images, spatial_map_d=spatial_map_d)
+            self.loss_fn_g_adv = None # Generic name for primary G adversarial loss
+            self.loss_fn_d_adv = None # Generic name for primary D adversarial loss
 
-        if self.model_architecture == "gan6_gat_cnn":
-            z_dim_to_use = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
-        else:
-            z_dim_to_use = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
+        print(f"Loss functions initialized. R1 Gamma set to: {self.r1_gamma if hasattr(self, 'r1_gamma') else 'N/A (not used by all models)'}")
+        if self.model_architecture == "cyclegan":
+            print(f"CycleGAN Lambdas: Cycle A/B={self.config.model.cyclegan_lambda_cycle_a}/{self.config.model.cyclegan_lambda_cycle_b}, Identity={self.config.model.cyclegan_lambda_identity}")
 
-        z_noise = torch.randn(current_batch_size, z_dim_to_use, device=self.device)
 
-        g_args = [z_noise]
-        g_kwargs = {}
-        if self.model_architecture == "gan5_gcn":
-            g_args.extend([real_images_gan_norm, segments_map, adj_matrix])
-        elif self.model_architecture == "gan6_gat_cnn":
-            if graph_batch_pyg is not None and self.E is not None:
-                z_graph = self.E(graph_batch_pyg)
-                if self.config.model.gan6_gat_cnn_use_null_graph_embedding:
-                    print("INFO: gan6_gat_cnn - Using null graph embedding by config.")
-                    z_graph = torch.zeros_like(z_graph)
-            elif self.E is not None:
-                print(
-                    "INFO: gan6_gat_cnn - graph_batch_pyg is None (due to workaround), creating zero z_graph for G's input (D_train step).")
-                z_graph_dim = self.config.model.gan6_z_dim_graph_encoder_output
-                z_graph = torch.zeros(current_batch_size, z_graph_dim, device=self.device)
-            else:
-                print(
-                    "INFO: gan6_gat_cnn - self.E is None (gan6_use_graph_encoder=False), creating zero z_graph for G's input (D_train step).")
-                z_graph_dim = self.config.model.gan6_z_dim_graph_encoder_output
-                z_graph = torch.zeros(current_batch_size, z_graph_dim, device=self.device)
-            g_args = [z_graph, current_batch_size]
-        elif self.model_architecture in ["dcgan", "stylegan2", "stylegan3", "projected_gan"]:
-            g_kwargs['spatial_map_g'] = spatial_map_g
-            g_kwargs['z_superpixel_g'] = z_superpixel_g
-            if self.model_architecture in ["stylegan2", "projected_gan"]:  # Corrected: was model.config...
-                g_kwargs['style_mix_prob'] = getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9)
+    def train(self):
+        print(f"Starting training for {self.config.num_epochs} epochs...")
 
-                g_kwargs['truncation_psi'] = None
+
+        train_dataloader = get_dataloader(self.config, data_split="train", shuffle=True, drop_last=True)
+        if train_dataloader is None:
+            print("No training dataloader found. Exiting.")
+            return
+
+        for epoch in range(self.current_epoch, self.config.num_epochs):
+
+
+            self.current_epoch = epoch
+            self.G.train()
+            self.D.train()
+            if self.E: self.E.train()
+            if self.sp_latent_encoder: self.sp_latent_encoder.train()
+
+            batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{self.config.num_epochs}")
+            for batch_idx, raw_batch_data in enumerate(batch_iterator):
+                if raw_batch_data is None:
+                    print(f"Warning: Trainer received a None batch from dataloader at training iteration {self.current_iteration} (epoch {epoch+1}, batch_idx {batch_idx}). Skipping batch.")
+                    self.current_iteration +=1
+                    continue
 
                 self.current_iteration += 1
                 logs = {} # Initialize logs dict for each iteration
@@ -255,17 +247,17 @@ class Trainer:
                     real_images_gan_norm = raw_batch_data[0].to(self.device)
                     graph_batch_pyg = None
                 elif isinstance(raw_batch_data, dict) and "image" in raw_batch_data: # SuperpixelDataset or ImageDataset
-                        real_images_gan_norm = raw_batch_data["image"].to(self.device)
-                        if "segments" in raw_batch_data: segments_map = raw_batch_data["segments"].to(self.device)
-                        if "adj" in raw_batch_data: adj_matrix = raw_batch_data["adj"].to(self.device)
-                    elif isinstance(raw_batch_data, tuple) and len(raw_batch_data) == 2: # ImageToGraphDataset
-                        real_images_gan_norm, graph_batch_pyg = raw_batch_data
-                        real_images_gan_norm = real_images_gan_norm.to(self.device)
-                        graph_batch_pyg = graph_batch_pyg.to(self.device)
-                    elif isinstance(raw_batch_data, torch.Tensor): # Fallback if ImageDataset returns just a tensor
-                        real_images_gan_norm = raw_batch_data.to(self.device)
+                    real_images_gan_norm = raw_batch_data["image"].to(self.device)
+                    if "segments" in raw_batch_data: segments_map = raw_batch_data["segments"].to(self.device)
+                    if "adj" in raw_batch_data: adj_matrix = raw_batch_data["adj"].to(self.device)
+                elif isinstance(raw_batch_data, tuple) and len(raw_batch_data) == 2: # ImageToGraphDataset
+                    real_images_gan_norm, graph_batch_pyg = raw_batch_data
+                    real_images_gan_norm = real_images_gan_norm.to(self.device)
+                    graph_batch_pyg = graph_batch_pyg.to(self.device)
+                elif isinstance(raw_batch_data, torch.Tensor): # Fallback if ImageDataset returns just a tensor
+                    real_images_gan_norm = raw_batch_data.to(self.device)
 
-                    if real_images_gan_norm is None:
+                if real_images_gan_norm is None:
                         print(f"Warning: Could not extract real images for training batch (arch: {self.model_architecture}, type: {type(raw_batch_data)}). Skipping.")
                         continue
                     current_batch_size = real_images_gan_norm.size(0)
@@ -319,55 +311,52 @@ class Trainer:
                     # For StyleGAN2, d_input_real_images might be augmented
                     d_real_logits = self.D(d_input_real_images, spatial_map_d=spatial_map_d)
 
-        if self.model_architecture == "gan6_gat_cnn":
-            d_fake_logits = self.D(fake_images.detach())
-        else:
-            d_fake_logits = self.D(fake_images.detach(), spatial_map_d=spatial_map_d)
 
-        if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
-            lossD = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
-        else:
+                if self.model_architecture == "gan6_gat_cnn":
+                    z_dim_to_use = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
+                else:
+                    z_dim_to_use = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
 
-            lossD = self.loss_fn_d(d_real_logits, d_fake_logits)
-        logs["Loss_D_Adv"] = lossD.item()
+                z_noise = torch.randn(current_batch_size, z_dim_to_use, device=self.device)
 
-        if self.r1_gamma > 0:
-            r1_penalty = compute_grad_penalty(d_real_logits, real_images_gan_norm) * self.r1_gamma / 2
-            lossD += r1_penalty
-            logs["Loss_D_R1"] = r1_penalty.item()
+                g_args = [z_noise]
+                g_kwargs = {}
+                if self.model_architecture == "gan5_gcn":
+                    g_args.extend([real_images_gan_norm, segments_map, adj_matrix])
+                elif self.model_architecture == "gan6_gat_cnn":
+                    if graph_batch_pyg is not None and self.E is not None:
+                        z_graph = self.E(graph_batch_pyg)
+                        if self.config.model.gan6_gat_cnn_use_null_graph_embedding:
+                            print("INFO: gan6_gat_cnn - Using null graph embedding by config.")
+                            z_graph = torch.zeros_like(z_graph)
+                    elif self.E is not None:
+                        print("INFO: gan6_gat_cnn - graph_batch_pyg is None (due to workaround), creating zero z_graph for G's input (D_train step).")
+                        z_graph_dim = self.config.model.gan6_z_dim_graph_encoder_output
+                        z_graph = torch.zeros(current_batch_size, z_graph_dim, device=self.device)
+                    else:
+                        print("INFO: gan6_gat_cnn - self.E is None (gan6_use_graph_encoder=False), creating zero z_graph for G's input (D_train step).")
+                        z_graph_dim = self.config.model.gan6_z_dim_graph_encoder_output
+                        z_graph = torch.zeros(current_batch_size, z_graph_dim, device=self.device)
+                    g_args = [z_graph, current_batch_size]
+                elif self.model_architecture in ["dcgan", "stylegan2", "stylegan3", "projected_gan"]:
+                    g_kwargs['spatial_map_g'] = spatial_map_g
+                    g_kwargs['z_superpixel_g'] = z_superpixel_g
+                    if self.model_architecture in ["stylegan2", "projected_gan"]: # Corrected: was model.config...
+                        g_kwargs['style_mix_prob'] = getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9)
 
-        lossD.backward()
-        self.optimizer_D.step()
-        logs["Loss_D_Total"] = lossD.item()
-        toggle_grad(self.D, False)
+                        g_kwargs['truncation_psi'] = None
 
-        if self.current_iteration % self.config.d_updates_per_g_update == 0:
-            toggle_grad(self.G, True)
-            if self.E: toggle_grad(self.E, True)
-            if self.sp_latent_encoder: toggle_grad(self.sp_latent_encoder, True)
-            self.optimizer_G.zero_grad()
+                with torch.no_grad():
+                    fake_images = self.G(*g_args, **g_kwargs)
 
-            if self.model_architecture == "gan6_gat_cnn":
-                z_dim_to_use_g = getattr(self.config.model, "gan6_z_dim_noise", self.config.model.z_dim)
-            else:
-                z_dim_to_use_g = getattr(self.config.model, f"{self.model_architecture}_z_dim", self.config.model.z_dim)
-            z_noise_g = torch.randn(current_batch_size, z_dim_to_use_g, device=self.device)
 
-            g_args_g = [z_noise_g]
-            g_kwargs_g = {}
-            if self.model_architecture == "gan5_gcn":
-                g_args_g.extend([real_images_gan_norm, segments_map, adj_matrix])
-            elif self.model_architecture == "gan6_gat_cnn":
-                if graph_batch_pyg is not None and self.E is not None:
-                    z_graph_g = self.E(graph_batch_pyg)
-                    if self.config.model.gan6_gat_cnn_use_null_graph_embedding and self.E:
-                        print("INFO: gan6_gat_cnn - Using null graph embedding by config (G_train step).")
-                        z_graph_g = torch.zeros_like(z_graph_g)
-                elif self.E is not None:
-                    print(
-                        "INFO: gan6_gat_cnn - graph_batch_pyg is None (due to workaround), creating zero z_graph_g for G's input (G_train step).")
-                    z_graph_dim = self.config.model.gan6_z_dim_graph_encoder_output
-                    z_graph_g = torch.zeros(current_batch_size, z_graph_dim, device=self.device)
+                if self.model_architecture == "gan6_gat_cnn":
+                    d_fake_logits = self.D(fake_images.detach())
+                else:
+                    d_fake_logits = self.D(fake_images.detach(), spatial_map_d=spatial_map_d)
+
+                if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
+                    lossD = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
                 else:
                     lossD = self.loss_fn_d(d_real_logits, d_fake_logits)
                 logs["Loss_D_Adv"] = lossD.item()
@@ -427,7 +416,6 @@ class Trainer:
                         d_fake_logits_for_g = self.D(fake_images_for_g)
                     else:
                         d_fake_logits_for_g = self.D(fake_images_for_g, spatial_map_d=spatial_map_d)
-
 
                     if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
                         lossG_adv = self.loss_fn_g_stylegan2(d_fake_logits_for_g)
