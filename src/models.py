@@ -691,10 +691,7 @@ class StyleGAN2Generator(nn.Module):
 
             x = block(x, style_for_block)
 
-            # Upsample the RGB image from the previous resolution.
             rgb = F.interpolate(rgb, scale_factor=2, mode='bilinear', align_corners=False)
-
-            # Generate a new RGB image from the current feature map and add it to the upsampled RGB from the previous level.
             rgb = torgb(x, style_for_torgb, skip_rgb=rgb)
 
         return torch.tanh(rgb) # Final output in [-1, 1]
