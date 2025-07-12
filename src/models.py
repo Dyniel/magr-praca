@@ -1337,6 +1337,7 @@ class StyleGAN3Discriminator(nn.Module):
             in_ch = out_ch
 
         convs.append(ConvBlock(in_ch, self.channels[4], 3))
+        in_ch = self.channels[4] # Update in_ch to the output of the last ConvBlock
 
         final_conv_channels = self.channels[4]
         # This convolution reduces the spatial dimension from 4x4 to 1x1
@@ -1355,7 +1356,7 @@ class StyleGAN3Discriminator(nn.Module):
                 raise ValueError(
                     f"StyleGAN3 D: image shape {image.shape} and spatial_map_d shape {spatial_map_d.shape} H,W mismatch.")
             input_to_d = torch.cat([image, spatial_map_d], dim=1)
-        return self.convs(input_to_d).squeeze(1)
+        return self.convs(input_to_d).squeeze()
 
 
 print("src/models.py created and populated with Generator, Discriminator, and helper modules.")
