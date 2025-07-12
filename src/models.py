@@ -1339,9 +1339,11 @@ class StyleGAN3Discriminator(nn.Module):
         convs.append(ConvBlock(in_ch, self.channels[4], 3))
 
         final_conv_channels = self.channels[4]
-        convs.append(EqualizedConv2d(final_conv_channels, final_conv_channels, 4, padding=0))
-        # convs.append(AliasFreeActivation(negative_slope=0.2, fir_kernel=self.fir_kernel))
+        # This convolution reduces the spatial dimension from 4x4 to 1x1
+        convs.append(EqualizedConv2d(in_ch, final_conv_channels, 4, padding=0))
+        convs.append(nn.LeakyReLU(0.2, inplace=True))
         convs.append(nn.Flatten())
+        # The input features for the linear layer is now final_conv_channels (which is 512)
         convs.append(EqualizedLinear(final_conv_channels, 1))
 
         self.convs = nn.Sequential(*convs)

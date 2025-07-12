@@ -30,7 +30,7 @@ optimizer:
   beta2: 0.99
 
 logging:
-  use_wandb: true
+  use_wandb: false
   wandb_entity: "ciedaniel"
   wandb_project_name: ${project_name}
   wandb_run_name: ${run_name}
