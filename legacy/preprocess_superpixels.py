@@ -7,7 +7,7 @@ from PIL import Image
 from torchvision import transforms
 
 # Ścieżki
-dataset_path = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+dataset_path = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train"
 out_dir      = "/home/student2/histo/superpixel_cache"
 os.makedirs(out_dir, exist_ok=True)
 

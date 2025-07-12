@@ -83,7 +83,7 @@ This project implements a Generative Adversarial Network (GAN) that is condition
 
 4.  **Dataset:**
     *   Download or prepare your image dataset.
-    *   Update the `dataset_path` in `configs/base_config.py` or your experiment YAML file to point to your dataset directory. The default is `/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc`.
+    *   Update the `dataset_path` in `configs/base_config.py` or your experiment YAML file to point to your dataset directory. The default is `/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc`. After splitting the dataset, you should have `train`, `val`, and `test` subdirectories. The config paths should point to these subdirectories.
 
 ## Configuration
 

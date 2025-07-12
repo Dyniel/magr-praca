@@ -1,7 +1,9 @@
 project_name: "TestRun"
 run_name: "stylegan2_no_superpixels_test"
 
-dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc" # Use an existing path from base_config
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train" # Use an existing path from base_config
+dataset_path_val: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/val"
+dataset_path_test: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/test"
 cache_dir: "test_cache_delete_me" # Temporary cache
 num_workers: 0 # Easier for debugging
 device: "cpu" # Forcing CPU for this test to avoid CUDA issues if any

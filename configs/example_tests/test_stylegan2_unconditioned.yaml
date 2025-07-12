@@ -2,7 +2,9 @@
 project_name: "GAN_Tests"
 run_name: "stylegan2_unconditioned_smoke_test"
 
-dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train"
+dataset_path_val: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/val"
+dataset_path_test: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/test"
 cache_dir: "./cache_test_sg2_uncond"
 image_size: 64
 num_superpixels: 50 # Ignored
