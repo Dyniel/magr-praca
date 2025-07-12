@@ -477,7 +477,7 @@ class StyleBlock(nn.Module):
             self.convs.append(
                 ModulatedConv2d(
                     current_in, out_channel, kernel_size, style_dim,
-                    up=False, # Upsampling is now handled by F.interpolate
+                    up=False,  # Upsampling is now handled by F.interpolate
                     blur_kernel=blur_kernel
                 )
             )
@@ -1100,29 +1100,25 @@ class StyleGAN3Layer(nn.Module):
         # Convolution: In StyleGAN3, this is often an equivariant conv or carefully designed standard conv
         # For simplicity, using EqualizedConv2d from StyleGAN2 components
         self.conv = EqualizedConv2d(in_channels, out_channels, kernel_size,
-                                    padding=kernel_size // 1)  # padding kernel_size//2
+                                    padding=kernel_size // 2)  # padding kernel_size//2
 
         self.noise_injection = NoiseInjection(out_channels)  # Similar to StyleGAN2
         self.activation = AliasFreeActivation(negative_slope=0.2, upsample_factor=(2 if upsample else 1),
                                               fir_kernel=fir_kernel)
 
         if upsample:
-            # Simplified upsampling, StyleGAN3 uses specific FIR-based upsamplers
-            # This would ideally be integrated with the convolution (strided transpose conv with FIR)
-            self.upsampler_fir = Blur(fir_kernel if fir_kernel else [1, 3, 3, 1],
-                                      pad=((len(fir_kernel) - 1) // 2 if fir_kernel else 1,
-                                           (len(fir_kernel) - 1) // 2 if fir_kernel else 1), upsample_factor=2)
+            self.upsampler = lambda x: F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+        else:
+            self.upsampler = None
 
     def forward(self, x, w_style, noise=None):
         # Style modulation (simplified)
         style = self.style_affine(w_style).unsqueeze(2).unsqueeze(3)  # [B, C_in, 1, 1]
-        x = x * (style + 1)  # Affine: scale and shift (bias is in style_affine)
 
-        if self.upsample:
-            # x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False) # Basic upsample
-            x = self.upsampler_fir(x)  # Upsample with FIR blur
+        if self.upsampler:
+            x = self.upsampler(x)
 
-        x = self.conv(x)
+        x = self.conv(x * (style + 1))
         # Always generate noise dynamically after potential upsampling.
         x = self.noise_injection(x, noise=None)
         x = self.activation(x)
@@ -1155,7 +1151,7 @@ class StyleGAN3Generator(nn.Module):
 
         self.log_size = int(math.log2(self.image_size))
         self.num_styles_needed = 2 * (
-                    self.log_size - 1)  # Similar to StyleGAN2's w broadcasting logic for styles per layer
+                self.log_size - 1)  # Similar to StyleGAN2's w broadcasting logic for styles per layer
 
         # --- Synthesis Network (StyleGAN3-T like structure) ---
         self.fourier_features_dim = self.channels[4] * 4 * 4
@@ -1337,15 +1333,14 @@ class StyleGAN3Discriminator(nn.Module):
             in_ch = out_ch
 
         convs.append(ConvBlock(in_ch, self.channels[4], 3))
-        in_ch = self.channels[4] # Update in_ch to the output of the last ConvBlock
+        in_ch = self.channels[4]
 
-        final_conv_channels = self.channels[4]
-        # This convolution reduces the spatial dimension from 4x4 to 1x1
-        convs.append(EqualizedConv2d(in_ch, final_conv_channels, 4, padding=0))
-        convs.append(nn.LeakyReLU(0.2, inplace=True))
+        # Final prediction layers
         convs.append(nn.Flatten())
-        # The input features for the linear layer is now final_conv_channels (which is 512)
-        convs.append(EqualizedLinear(final_conv_channels, 1))
+        # The input features for the linear layer depend on the output of the last ConvBlock,
+        # which is a 4x4 feature map with `in_ch` channels.
+        linear_in_features = in_ch * 4 * 4
+        convs.append(EqualizedLinear(linear_in_features, 1))
 
         self.convs = nn.Sequential(*convs)
 
