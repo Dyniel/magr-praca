@@ -34,7 +34,7 @@ config = {
     "r1_gamma": 10.0,
     "r2_gamma": 0.1,
     "num_epochs": 200,
-    "dataset_path": "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc",
+    "dataset_path": "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train",
     "cache_dir": "/home/student2/histo/superpixel_cache",
     "num_workers": 8,
     "mixed_precision": True,

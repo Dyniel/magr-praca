@@ -168,6 +168,8 @@ class BaseConfig:
     run_name: str = "default_run" # Specific name for this run, used for subfolder in output_dir
     # Full path to the dataset
     dataset_path: str = "dummy_dataset/images/"
+    dataset_path_val: Optional[str] = None
+    dataset_path_test: Optional[str] = None
     # Directory to cache precomputed superpixels
     cache_dir: str = "superpixel_cache"
     num_workers: int = 4 # For DataLoader
