@@ -1,0 +1,8 @@
+model,status
+test_dcgan_unconditioned,success
+test_stylegan3_unconditioned,success
+test_projectedgan_unconditioned,success
+test_stylegan2_unconditioned,success
+test_histogan,success
+test_stylegan2_superpixel_conditioned,success
+test_stylegan2_ada,success
