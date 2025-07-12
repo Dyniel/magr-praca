@@ -722,8 +722,8 @@ class StyleGAN2Generator(nn.Module):
 
             # Prepare styles for this block's layers and its ToRGB
             # Each conv in block gets a style, and ToRGB gets a style
-            style_idx += 1 # Style for first conv in block
-            style_for_block_conv1 = styles[:, style_idx]
+            # The lines for style_idx and style_for_block_conv1 were redundant
+            # as styles are directly indexed using 'i' below.
 
             # If block has 2 layers, second conv needs another style
             # This style indexing needs to be robust to block.num_layers

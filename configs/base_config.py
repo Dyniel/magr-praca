@@ -53,13 +53,19 @@ class ModelConfig:
     stylegan2_n_mlp: int = 8 # Number of layers in mapping network
     stylegan2_lr_mul_mapping: float = 0.01 # Learning rate multiplier for mapping network
     stylegan2_channel_multiplier: int = 2 # Channel multiplier for G and D resolutions
+    stylegan2_style_mix_prob: float = 0.9  # Probability of applying style mixing.
+    stylegan2_use_truncation: bool = True  # Whether to use truncation trick during inference/sampling.
+    stylegan2_truncation_psi: float = 0.7  # Truncation psi for training/sampling (if not overridden for eval).
+    stylegan2_truncation_cutoff: Optional[int] = None  # Number of layers to apply truncation to (all if None or 0).
+    stylegan2_truncation_psi_eval: float = 0.7 # Truncation psi specifically for evaluation.
+    stylegan2_truncation_cutoff_eval: Optional[int] = None # Truncation cutoff specifically for evaluation.
     # stylegan2_blur_kernel: list[int] = field(default_factory=lambda: [1,3,3,1]) # Blur kernel for FIR filtering
     # stylegan2_g_reg_every: int = 4 # How often to perform G path regularization (if implemented)
     # stylegan2_d_reg_every: int = 16 # How often to perform D R1 regularization
 
     # StyleGAN2-ADA specific parameters
     stylegan2_ada_target_metric_val: float = 0.6 # Target value for the chosen ADA metric (e.g., r_v, FID threshold)
-    stylegan2_ada_interval_kimg: int = 4       # How often to update p_aug (in kimg)
+    stylegan2_ada_interval_kimg: float = 4.0     # How often to update p_aug (in kimg), changed to float
     stylegan2_ada_kimg_target_ramp_up: int = 500 # Duration over which to ramp up p_aug towards initial_p_aug_target if metric is too low
     stylegan2_ada_p_aug_initial: float = 0.0 # Initial augmentation probability
     stylegan2_ada_p_aug_step: float = 0.005   # Step size for adjusting p_aug

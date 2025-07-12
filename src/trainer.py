@@ -71,8 +71,8 @@ class Trainer:
         # For ProjectedGAN feature matching
         if self.model_architecture == "projected_gan":
             self.feature_extractor = FeatureExtractor(
-                model_name=self.config.model.projectedgan_feature_extractor_model, # Corrected: was projectedgan_feature_extractor_name
-                layers_to_extract=self.config.model.projectedgan_feature_layers_to_extract, # Corrected: was projectedgan_feature_extractor_layers
+                model_name=self.config.model.projectedgan_feature_extractor_name,
+                layers_to_extract=self.config.model.projectedgan_feature_layers_to_extract,
                 pretrained=True,
                 requires_grad=False
             ).to(self.device).eval()
@@ -316,6 +316,8 @@ class Trainer:
                     # This specific model might need more nuanced z_dim handling if its structure is complex.
                     # Let's assume for now it has "gan6_z_dim" defined in ModelConfig.
                     z_dim_to_use = getattr(self.config.model, "gan6_z_dim_noise", getattr(self.config.model, f"{self.model_architecture}_z_dim"))
+                elif self.model_architecture == "histogan":
+                    z_dim_to_use = self.config.model.stylegan2_z_dim # HistoGAN uses StyleGAN2's z_dim
                 else:
                     z_dim_to_use = getattr(self.config.model, f"{self.model_architecture}_z_dim")
 
@@ -358,9 +360,9 @@ class Trainer:
                     d_fake_logits = self.D(fake_images.detach(), spatial_map_d=spatial_map_d)
 
                 if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
-                    lossD = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
+                    lossD = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
                 else:
-                    lossD = self.loss_fn_d(d_real_logits, d_fake_logits)
+                    lossD = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
                 logs["Loss_D_Adv"] = lossD.item()
 
                 if self.r1_gamma > 0:
@@ -383,6 +385,8 @@ class Trainer:
                     if self.model_architecture == "gan6_gat_cnn":
                         # Consistent handling for gan6_gat_cnn as above
                         z_dim_to_use_g = getattr(self.config.model, "gan6_z_dim_noise", getattr(self.config.model, f"{self.model_architecture}_z_dim"))
+                    elif self.model_architecture == "histogan":
+                        z_dim_to_use_g = self.config.model.stylegan2_z_dim # HistoGAN uses StyleGAN2's z_dim
                     else:
                         z_dim_to_use_g = getattr(self.config.model, f"{self.model_architecture}_z_dim")
                     z_noise_g = torch.randn(current_batch_size, z_dim_to_use_g, device=self.device)
@@ -421,9 +425,9 @@ class Trainer:
                         d_fake_logits_for_g = self.D(fake_images_for_g, spatial_map_d=spatial_map_d)
 
                     if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
-                        lossG_adv = self.loss_fn_g_stylegan2(d_fake_logits_for_g)
+                        lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
                     else:
-                        lossG_adv = self.loss_fn_g(d_fake_logits_for_g)
+                        lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
                     logs["Loss_G_Adv"] = lossG_adv.item()
                     lossG = lossG_adv
 
@@ -635,6 +639,8 @@ class Trainer:
                 if self.model_architecture == "gan6_gat_cnn":
                     # Consistent handling for gan6_gat_cnn as in train method
                     z_dim_to_use_eval = getattr(self.config.model, "gan6_z_dim_noise", getattr(self.config.model, f"{self.model_architecture}_z_dim"))
+                elif self.model_architecture == "histogan":
+                    z_dim_to_use_eval = self.config.model.stylegan2_z_dim # HistoGAN uses StyleGAN2's z_dim
                 else:
                     z_dim_to_use_eval = getattr(self.config.model, f"{self.model_architecture}_z_dim")
                 z_noise = torch.randn(current_batch_size, z_dim_to_use_eval, device=self.device)
@@ -679,11 +685,11 @@ class Trainer:
                     d_fake_logits = self.D(fake_images, spatial_map_d=eval_spatial_map_d)
 
                 if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan"]:
-                    lossD_adv_batch = self.loss_fn_d_stylegan2(d_real_logits, d_fake_logits)
-                    lossG_batch = self.loss_fn_g_stylegan2(d_fake_logits)
+                    lossD_adv_batch = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
+                    lossG_batch = self.loss_fn_g_adv(d_fake_logits)
                 else:
-                    lossD_adv_batch = self.loss_fn_d(d_real_logits, d_fake_logits)
-                    lossG_batch = self.loss_fn_g(d_fake_logits)
+                    lossD_adv_batch = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
+                    lossG_batch = self.loss_fn_g_adv(d_fake_logits)
 
                 if self.model_architecture == "projected_gan":
                     real_01_eval = denormalize_image(eval_real_images_gan_norm)

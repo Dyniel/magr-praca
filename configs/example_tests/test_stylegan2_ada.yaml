@@ -24,7 +24,7 @@ model:
 
   # ADA parameters
   stylegan2_ada_target_metric_val: 0.6 # Target for r_t (simplified as D_real_logits mean)
-  stylegan2_ada_interval_kimg: 1 # Update p_aug frequently for testing (e.g., every 1*batch_size*iter/1000 kimg)
+  # stylegan2_ada_interval_kimg: 1 # Update p_aug frequently for testing (e.g., every 1*batch_size*iter/1000 kimg)
                                   # For a batch_size of 2, and 8 iterations per epoch (16 images / 2 batch_size),
                                   # 1 kimg = 1000 images / 2 = 500 iterations.
                                   # Let's make interval_kimg very small for testing, e.g. 0.01kimg = 10 images
