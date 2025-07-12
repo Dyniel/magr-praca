@@ -1123,7 +1123,8 @@ class StyleGAN3Layer(nn.Module):
             x = self.upsampler_fir(x)  # Upsample with FIR blur
 
         x = self.conv(x)
-        x = self.noise_injection(x, noise=noise)
+        # Always generate noise dynamically after potential upsampling.
+        x = self.noise_injection(x, noise=None)
         x = self.activation(x)
         return x
 
