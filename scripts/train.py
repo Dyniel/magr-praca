@@ -9,7 +9,8 @@ from configs.base_config import BaseConfig
 
 def main():
     parser = argparse.ArgumentParser(description="Train a GAN model using the main Trainer from src.trainer.")
-    parser.add_argument("--config_file", type=str, default=None,
+    # This argument will be parsed by argparse and not passed to OmegaConf
+    parser.add_argument("--config-file", type=str, default=None,
                         help="Path to a YAML configuration file to override base defaults.")
 
     # Allow unknown args for OmegaConf to parse as dot-list overrides
@@ -29,19 +30,15 @@ def main():
         except Exception as e:
             print(f"Error loading config file {args.config_file}: {e}. Using defaults and CLI overrides.")
 
-    # Apply command-line overrides
+    # Apply command-line overrides from the remaining arguments
     if unknown_args:
-        processed_unknown_args = []
-        for arg in unknown_args:
-            if arg.startswith("--"):
-                processed_unknown_args.append(arg[2:]) # Remove "--"
-            else:
-                processed_unknown_args.append(arg)
         try:
-            print(f"Processing dotlist overrides from: {processed_unknown_args}")
-            cli_overrides = OmegaConf.from_dotlist(processed_unknown_args)
+            # The unknown_args should be in a format that from_dotlist can parse,
+            # e.g., ['foo.bar=10', 'baz=True']
+            print(f"Processing dotlist overrides from: {unknown_args}")
+            cli_overrides = OmegaConf.from_dotlist(unknown_args)
             conf = OmegaConf.merge(conf, cli_overrides)
-            print(f"Applied CLI overrides from original args: {unknown_args}")
+            print(f"Applied CLI overrides: {unknown_args}")
         except Exception as e:
             print(f"Error applying CLI overrides: {e}.")
 
