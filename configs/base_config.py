@@ -167,7 +167,7 @@ class BaseConfig:
     output_dir_base: str = "experiment_outputs"
     run_name: str = "default_run" # Specific name for this run, used for subfolder in output_dir
     # Full path to the dataset
-    dataset_path: str = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+    dataset_path: str = "dummy_dataset/images/"
     # Directory to cache precomputed superpixels
     cache_dir: str = "superpixel_cache"
     num_workers: int = 4 # For DataLoader
