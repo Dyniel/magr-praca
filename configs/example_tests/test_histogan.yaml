@@ -2,7 +2,7 @@
 project_name: "GAN_Tests"
 run_name: "histogan_smoke_test"
 
-dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+dataset_path: "dummy_dataset/images"
 cache_dir: "./cache_test_histogan"
 image_size: 64
 num_superpixels: 50 # Ignored if use_superpixel_conditioning is false
