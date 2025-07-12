@@ -359,11 +359,13 @@ class ModulatedConv2d(nn.Module):
         if up:
             factor = 2
             p = (factor - 1) - (kernel_size - 1)
-            self.blur = Blur(blur_kernel, pad=(p + 1) // 2 + factor - 1, upsample_factor=factor)
+            pad_val = (p + 1) // 2 + factor - 1
+            self.blur = Blur(blur_kernel, pad=(pad_val, pad_val), upsample_factor=factor)
         if down:
             factor = 2
             p = (factor - 1) + (kernel_size - 1)
-            self.blur = Blur(blur_kernel, pad=p // 2, downsample_factor=factor)
+            pad_val = p // 2
+            self.blur = Blur(blur_kernel, pad=(pad_val, pad_val), downsample_factor=factor)
 
         self.padding = kernel_size // 2
 
@@ -684,41 +686,16 @@ class StyleGAN2Generator(nn.Module):
         # styles[:, 2*k] for block k-1, styles[:, 2*k+1] for block k-1's ToRGB
 
         for i, (block, torgb) in enumerate(zip(self.blocks, self.torgbs)):
-            # Upsample previous RGB for skip connection
-            # Note: StyleGAN2 upsamples features then convs, then adds blurred upsampled RGB.
-            # Here, ToRGB does not upsample. Upsampling of RGB for skip must be explicit.
-            # The StyleBlock itself handles feature upsampling.
-
-            # Let's assume styles are indexed:
-            # styles[:, 0] for initial_conv
-            # styles[:, 1] for initial_torgb
-            # styles[:, 2] for block 0 (8x8), styles[:, 3] for block 0's ToRGB
-            # styles[:, 4] for block 1 (16x16), styles[:, 5] for block 1's ToRGB
-            # ...
-            # styles[:, 2*k] for block k-1, styles[:, 2*k+1] for block k-1's ToRGB
-
-            style_for_block = styles[:, 2 + 2*i]
-            style_for_torgb = styles[:, 2 + 2*i + 1]
+            style_for_block = styles[:, 2 + 2 * i]
+            style_for_torgb = styles[:, 3 + 2 * i]
 
             x = block(x, style_for_block)
 
-            if i > 0: # For blocks after the first one (8x8), need to upsample previous rgb
-                 # This upsampling should use the blur kernel.
-                 # The official StyleGAN2 applies FIR filter for upsampling.
-                 # For simplicity, let's use F.interpolate with 'bilinear'.
-                 skip_rgb = F.interpolate(skip_rgb, scale_factor=2, mode='bilinear', align_corners=False)
+            # Upsample the RGB image from the previous resolution.
+            rgb = F.interpolate(rgb, scale_factor=2, mode='bilinear', align_corners=False)
 
-            # Store current rgb to be the skip for the next block
-            # This rgb is at the new resolution after the block.
-            current_rgb_from_block = torgb(x, style_for_torgb, skip_rgb=(skip_rgb if i > 0 else rgb)) # Pass upsampled previous full RGB
-
-            if i == 0: # First block (8x8), its rgb is the one from initial_torgb upsampled
-                rgb = F.interpolate(rgb, scale_factor=2, mode='bilinear', align_corners=False)
-                rgb = current_rgb_from_block # This combines with the upsampled initial RGB
-            else:
-                rgb = current_rgb_from_block
-
-            skip_rgb = rgb # This is the full RGB to be upsampled for the next block
+            # Generate a new RGB image from the current feature map and add it to the upsampled RGB from the previous level.
+            rgb = torgb(x, style_for_torgb, skip_rgb=rgb)
 
         return torch.tanh(rgb) # Final output in [-1, 1]
 
