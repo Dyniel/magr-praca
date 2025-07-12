@@ -355,7 +355,6 @@ class ModulatedConv2d(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.demodulate = demodulate
-        self.up = up
         self.down = down
 
         # Modulation: projects style vector to get per-channel scale for conv weights
@@ -369,11 +368,6 @@ class ModulatedConv2d(nn.Module):
         self.bias = nn.Parameter(torch.zeros(1, out_channels, 1, 1))
 
         # Upsampling/Downsampling related
-        if up:
-            factor = 2
-            p = (factor - 1) - (kernel_size - 1)
-            pad_val = (p + 1) // 2 + factor - 1
-            self.blur = Blur(blur_kernel, pad=(pad_val, pad_val), upsample_factor=factor)
         if down:
             factor = 2
             p = (factor - 1) + (kernel_size - 1)
@@ -397,20 +391,7 @@ class ModulatedConv2d(nn.Module):
             batch_size * self.out_channels, in_channels, self.kernel_size, self.kernel_size
         )
 
-        if self.up:
-            x = x.view(1, batch_size * in_channels, height, width)
-            weight = weight.view(batch_size, self.out_channels, in_channels, self.kernel_size, self.kernel_size)
-            weight = weight.transpose(1, 2).reshape(
-                batch_size * in_channels, self.out_channels, self.kernel_size, self.kernel_size
-            )
-            pad = self.kernel_size - 1
-            pad_top = pad // 2
-            pad_bottom = pad - pad_top
-
-            out = F.conv_transpose2d(x, weight, padding=(pad_top, pad_bottom), stride=2, groups=batch_size)
-            out = out.view(batch_size, self.out_channels, out.shape[-2], out.shape[-1])
-            out = self.blur(out)
-        elif self.down:
+        if self.down:
             x = self.blur(x)
             x = x.view(1, batch_size * in_channels, x.shape[-2], x.shape[-1])
             out = F.conv2d(x, weight, padding=self.padding, groups=batch_size)
@@ -489,14 +470,14 @@ class StyleBlock(nn.Module):
         self.convs = nn.ModuleList()
         self.noises = nn.ModuleList()
         self.activations = nn.ModuleList()
+        self.upsample = upsample
 
         for i in range(num_layers):
             current_in = in_channel if i == 0 else out_channel
             self.convs.append(
                 ModulatedConv2d(
                     current_in, out_channel, kernel_size, style_dim,
-                    up=(upsample if i == (num_layers - 1) else False),
-                    # Upsample on last conv of the block if specified
+                    up=False, # Upsampling is now handled by F.interpolate
                     blur_kernel=blur_kernel
                 )
             )
@@ -508,6 +489,9 @@ class StyleBlock(nn.Module):
         # noise_inputs is removed, noise is generated dynamically
 
         out = x
+        if self.upsample:
+            out = F.interpolate(out, scale_factor=2, mode='bilinear', align_corners=False)
+
         for i in range(self.num_layers):
             out = self.convs[i](out, style)
             out = self.noises[i](out, noise=None)  # Pass None to generate noise dynamically
