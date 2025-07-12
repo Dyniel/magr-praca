@@ -481,15 +481,14 @@ class StyleBlock(nn.Module):
             self.noises.append(NoiseInjection(out_channel))
             self.activations.append(nn.LeakyReLU(0.2, inplace=True))
 
-    def forward(self, x, style, noise_inputs=None):
+    def forward(self, x, style):
         # style is w: [B, style_dim]
-        # noise_inputs: list of noise tensors, one per layer, or None to generate noise
+        # noise_inputs is removed, noise is generated dynamically
 
         out = x
         for i in range(self.num_layers):
-            noise_i = noise_inputs[i] if noise_inputs is not None and i < len(noise_inputs) else None
             out = self.convs[i](out, style)
-            out = self.noises[i](out, noise=noise_i)
+            out = self.noises[i](out, noise=None) # Pass None to generate noise dynamically
             out = self.activations[i](out)
         return out
 
@@ -573,25 +572,6 @@ class StyleGAN2Generator(nn.Module):
         # Pre-generate noise structures if fixed noise is desired, or generate on the fly
         self.noises_fixed = None # Placeholder for storing fixed noise if needed
 
-    def make_noise(self, batch_size):
-        # Generates a list of noise tensors for all required noise inputs
-        # If self.noises_fixed is populated, use that, else generate random
-        if self.noises_fixed is not None:
-            # May need to select by batch_size if fixed noises are for a specific batch
-            return self.noises_fixed # This needs careful handling of batch_size
-
-        noises = []
-        # Initial block noise
-        noises.append(torch.randn(batch_size, 1, 4, 4, device=self.initial_constant.device)) # For initial_conv's first layer
-
-        current_res = 4
-        for i in range(3, self.log_size + 1):
-            current_res *= 2
-            # Each StyleBlock in self.blocks has num_layers (e.g., 2) convs, each needing noise
-            for _ in range(self.blocks[i-3].num_layers): # i-3 because blocks list starts from 8x8 (i=3)
-                noises.append(torch.randn(batch_size, 1, current_res, current_res, device=self.initial_constant.device))
-        return noises
-
     def w_to_styles(self, w, num_total_layers_for_w):
         # w: [B, w_dim] or [B, num_layers, w_dim] if already style-mixed
         if w.ndim == 2: # if [B, w_dim]
@@ -603,7 +583,7 @@ class StyleGAN2Generator(nn.Module):
             raise ValueError(f"w has incompatible shape: {w.shape}")
 
 
-    def forward(self, z_noise, style_mix_prob=0.9, noise_inputs=None, input_is_w=False,
+    def forward(self, z_noise, style_mix_prob=0.9, input_is_w=False,
                 truncation_psi=None, truncation_cutoff=None, w_avg=None,
                 spatial_map_g=None, z_superpixel_g=None): # New args for conditioning
 
@@ -679,9 +659,6 @@ class StyleGAN2Generator(nn.Module):
                 styles = self.w_to_styles(w, self.num_layers_total_for_w) # [B, num_layers, w_dim]
 
 
-        if noise_inputs is None:
-            noise_inputs = self.make_noise(batch_size)
-
         # --- Synthesis Network ---
         # Initial block (4x4)
         x = self.initial_constant.repeat(batch_size, 1, 1, 1) # [B, C_const, 4, 4]
@@ -699,74 +676,18 @@ class StyleGAN2Generator(nn.Module):
             # self.initial_conv in __init__ was already set up with increased in_channels.
 
         # Style for initial_conv is styles[:, 0]
-        # Noise for initial_conv is noise_inputs[0]
-        x = self.initial_conv(x, styles[:, 0], noise_inputs=[noise_inputs[0]])
+        x = self.initial_conv(x, styles[:, 0])
         rgb = self.initial_torgb(x, styles[:, 1]) # Style for initial_torgb is styles[:,1]
 
-        noise_idx = 1 # Start from noise_inputs[1] as noise_inputs[0] was for initial_conv
         # Style indexing: styles[:,0] for initial_conv, styles[:,1] for initial_torgb
         # styles[:,2] for first block in self.blocks, styles[:,3] for its ToRGB, etc.
-        style_idx_base_for_blocks = 2
+        # styles[:, 2*k] for block k-1, styles[:, 2*k+1] for block k-1's ToRGB
 
         for i, (block, torgb) in enumerate(zip(self.blocks, self.torgbs)):
             # Upsample previous RGB for skip connection
             # Note: StyleGAN2 upsamples features then convs, then adds blurred upsampled RGB.
             # Here, ToRGB does not upsample. Upsampling of RGB for skip must be explicit.
             # The StyleBlock itself handles feature upsampling.
-
-            # Prepare noise for this block's layers
-            block_noises = []
-            for _ in range(block.num_layers):
-                noise_idx += 1
-                block_noises.append(noise_inputs[noise_idx])
-
-            # Prepare styles for this block's layers and its ToRGB
-            # Each conv in block gets a style, and ToRGB gets a style
-            style_idx += 1 # Style for first conv in block
-            style_for_block_conv1 = styles[:, style_idx]
-
-            # If block has 2 layers, second conv needs another style
-            # This style indexing needs to be robust to block.num_layers
-            # For StyleGAN2, StyleBlock has 2 convs.
-            # initial_conv (1 style) -> style_idx = 0
-            # initial_torgb (1 style) -> style_idx = 1
-            # block1_conv1 (1 style) -> style_idx = 2
-            # block1_conv2 (1 style) -> style_idx = 3
-            # block1_torgb (1 style) -> style_idx = 4
-            # ... this means each StyleBlock consumes (num_layers + 1 for ToRGB) styles.
-            # The num_layers_total_for_w = (1 for initial_conv) + (1 for initial_torgb) + sum(block.num_layers + 1 for block in self.blocks)
-            # My current num_layers_total_for_w = (log_size - 2 + 1) * 2 is probably wrong.
-            # It should be: 1 (initial_conv) + 1 (initial_torgb) + num_blocks * (layers_per_styleblock + 1_for_torgb_of_block)
-            # Let's assume StyleBlock has 2 layers (conv+noise+act, conv+noise+act+upsample)
-            # Then num_layers_total_for_w = 1 (initial) + sum(1 for each conv in each block) = 1 + num_blocks * 2
-            # ToRGB layers also take styles. So num_layers_total_for_w = (1 for initial_conv) + (1 for initial_torgb) + num_blocks * (2_for_convs + 1_for_torgb)
-            # This is getting complicated. Simpler: each ModulatedConv2d needs one style.
-            # The number of ModulatedConv2d is:
-            # initial_conv (1 layer) -> 1
-            # initial_torgb -> 1
-            # Each StyleBlock (2 layers) -> 2 ModulatedConv2d
-            # Each torgb for a block -> 1 ModulatedConv2d
-            # Total = 1 + 1 + num_blocks * (2 + 1) = 2 + (log_size - 2) * 3
-            # My num_layers_total_for_w needs to be this value.
-            # For log_size=8 (256x256): num_blocks = 8-2 = 6. Total styles = 2 + 6*3 = 20.
-            # My previous calculation: (8-2+1)*2 = 7*2 = 14. This is likely the number of W inputs if each block gets one W.
-            # StyleGAN2 typically feeds the same W to both convs in a block.
-            # Let's use one style for the whole StyleBlock and one for its ToRGB.
-            # num_styles = 1 (initial_conv) + 1 (initial_torgb) + num_blocks * (1_for_block + 1_for_torgb) = 2 + (log_size-2)*2
-
-            # Re-evaluating self.num_layers_total_for_w:
-            # It's the number of distinct places w is injected.
-            # Initial constant -> initial_conv (1 style) -> initial_torgb (1 style) = 2 styles
-            # For each progressive block (e.g. 8x8 up to target_res):
-            #   StyleBlock (2 convs, but often take same w) -> 1 style (or 2 if different)
-            #   ToRGB for that block -> 1 style
-            # If StyleBlock takes one style for all its internal convs:
-            # Total styles = 1 (initial_conv) + 1 (initial_torgb) + num_blocks * (1_for_StyleBlock + 1_for_ToRGB)
-            # num_blocks = self.log_size - 2 (for 4x4) = self.log_size - 2
-            # Total styles = 2 + (self.log_size - 2) * 2 = 2 * (self.log_size - 1)
-            # For 256x256 (log_size=8): 2 * (8-1) = 14 styles. This matches my previous num_layers_total_for_w.
-            # This assumes StyleBlock uses ONE style vector for all its internal ModulatedConv2d.
-            # And ToRGB uses one style vector.
 
             # Let's assume styles are indexed:
             # styles[:, 0] for initial_conv
@@ -779,7 +700,7 @@ class StyleGAN2Generator(nn.Module):
             style_for_block = styles[:, 2 + 2*i]
             style_for_torgb = styles[:, 2 + 2*i + 1]
 
-            x = block(x, style_for_block, noise_inputs=block_noises)
+            x = block(x, style_for_block)
 
             if i > 0: # For blocks after the first one (8x8), need to upsample previous rgb
                  # This upsampling should use the blur kernel.

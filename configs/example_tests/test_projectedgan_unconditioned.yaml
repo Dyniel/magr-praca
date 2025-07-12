@@ -24,7 +24,7 @@ model:
 
   # ProjectedGAN specific params
   projectedgan_d_channel_multiplier: 1 # Discriminator's own path channel multiplier
-  projectedgan_feature_extractor_model: "resnet50" # Or "efficientnet_b0" - resnet50 is typically less heavy
+  projectedgan_feature_extractor_name: "resnet50" # Or "efficientnet_b0" - resnet50 is typically less heavy
   # projectedgan_feature_layers_to_extract: null # Defaults will be used
   projectedgan_feature_matching_loss_weight: 10.0
 
