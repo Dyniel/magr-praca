@@ -4,7 +4,9 @@
 # --- System and Paths ---
 project_name: "SuperpixelGAN_LungSCC_Experiment1"
 run_name: "gan5_refactored_lr_1e-5_bs_8"
-# dataset_path: "/path/to/your/custom_dataset" # Override if needed
+# dataset_path: "/path/to/your/custom_dataset/train" # Override if needed
+# dataset_path_val: "/path/to/your/custom_dataset/val" # Override if needed
+# dataset_path_test: "/path/to/your/custom_dataset/test" # Override if needed
 # cache_dir: "custom_cache_location" # Override if needed
 # output_dir_base: "/shared_drive/my_gan_experiments" # Override if needed
 

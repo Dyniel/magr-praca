@@ -25,7 +25,7 @@ except Exception:
 
 # ==================== CONFIG ====================
 class Cfg:
-    dataset_path   = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc"
+    dataset_path   = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train"
     image_size     = 256
     batch_size     = 8
     num_workers    = 4

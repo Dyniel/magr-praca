@@ -4,7 +4,9 @@
 # --- System and Paths ---
 project_name: "SuperpixelGAN_Sweeps" # WandB project for all sweeps
 # output_dir_base: "experiment_outputs_sweeps" # Optional: separate output for sweeps
-dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc" # CHECK THIS PATH
+dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train" # CHECK THIS PATH
+dataset_path_val: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/val" # CHECK THIS PATH
+dataset_path_test: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/test" # CHECK THIS PATH
 cache_dir: "superpixel_cache_sweeps"
 num_workers: 2 # Reduce for sweeps if I/O is not bottleneck
 device: "cuda"
