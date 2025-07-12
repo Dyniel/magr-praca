@@ -389,6 +389,8 @@ class Trainer:
                         z_dim_to_use_g = getattr(self.config.model, "gan6_z_dim_noise", getattr(self.config.model, f"{self.model_architecture}_z_dim"))
                     elif self.model_architecture == "histogan":
                         z_dim_to_use_g = self.config.model.stylegan2_z_dim # HistoGAN uses StyleGAN2's z_dim
+                    elif self.model_architecture == "projected_gan":
+                        z_dim_to_use_g = self.config.model.stylegan2_z_dim
                     else:
                         z_dim_to_use_g = getattr(self.config.model, f"{self.model_architecture}_z_dim")
                     z_noise_g = torch.randn(current_batch_size, z_dim_to_use_g, device=self.device)
