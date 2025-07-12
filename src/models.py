@@ -655,6 +655,8 @@ class StyleGAN2Generator(nn.Module):
                     styles = self.w_to_styles(w, self.num_layers_total_for_w)
                 else:
                     z2 = torch.randn_like(z_noise)
+                    if self.config_model.stylegan2_g_latent_cond and z_superpixel_g is not None:
+                        z2 = torch.cat([z2, z_superpixel_g], dim=1)
                     w2 = self.mapping_network(z2)
 
                     # Choose a crossover point for style mixing
