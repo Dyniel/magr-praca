@@ -4,3 +4,4 @@ run_name: "stylegan2_unconditioned"
 num_epochs: 200
 batch_size: 2
 enable_fid_calculation: True
+gradient_accumulation_steps: 2
