@@ -1,0 +1,6 @@
+model:
+  architecture: "stylegan3"
+run_name: "stylegan3_unconditioned"
+num_epochs: 200
+batch_size: 16
+enable_fid_calculation: True

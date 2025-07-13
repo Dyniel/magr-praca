@@ -22,43 +22,31 @@ def get_experiment_configurations() -> list[dict]:
     Each configuration is a dictionary with:
         - name: A descriptive name for the experiment.
         - model_architecture: The architecture to use.
+        - run_name_suffix: Suffix for WandB run name.
         - config_overrides: Dictionary of OmegaConf dot-paths and values to override.
     """
-    experiments = [
-        {
-            "name": "stylegan2_unconditioned",
-            "model_architecture": "stylegan2",
-            "config_overrides": {
-                "model.architecture": "stylegan2",
-                "run_name": "stylegan2_unconditioned",
-                "num_epochs": 200,
-                "batch_size": 16,
-                "enable_fid_calculation": True,
-            }
-        },
-        {
-            "name": "stylegan3_unconditioned",
-            "model_architecture": "stylegan3",
-            "config_overrides": {
-                "model.architecture": "stylegan3",
-                "run_name": "stylegan3_unconditioned",
-                "num_epochs": 200,
-                "batch_size": 16,
-                "enable_fid_calculation": True,
-            }
-        },
-        {
-            "name": "projectedgan_unconditioned",
-            "model_architecture": "projected_gan",
-            "config_overrides": {
-                "model.architecture": "projected_gan",
-                "run_name": "projectedgan_unconditioned",
-                "num_epochs": 200,
-                "batch_size": 16,
-                "enable_fid_calculation": True,
-            }
+    experiments = []
+    config_files = glob.glob("configs/example_tests/*.yaml")
+
+    for config_file in config_files:
+        conf = OmegaConf.load(config_file)
+        model_architecture = conf.model.architecture
+        run_name = os.path.basename(config_file).replace(".yaml", "")
+
+        overrides = {
+            "model.architecture": model_architecture,
+            "run_name": run_name,
+            "num_epochs": 200,
+            "batch_size": 32,
+            "enable_fid_calculation": True,
         }
-    ]
+
+        experiments.append({
+            "name": run_name,
+            "model_architecture": model_architecture,
+            "config_overrides": overrides
+        })
+
     return experiments
 
 def run_single_experiment(exp_config: dict, base_cfg_obj: OmegaConf):
