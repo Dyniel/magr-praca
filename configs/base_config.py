@@ -192,7 +192,7 @@ class BaseConfig:
     optimizer: OptimizerConfig = field(default_factory=lambda: OptimizerConfig())
 
     # --- Training Hyperparameters ---
-    batch_size: int = 4
+    batch_size: int = 2
     num_epochs: int = 200
     # g_lr, d_lr, beta1, beta2 are now in OptimizerConfig
     r1_gamma: float = 5.0 # R1 gradient penalty weight for Discriminator. This is sweepable directly.
