@@ -121,7 +121,8 @@ class StyleGAN2Trainer(BaseTrainer):
 
         # Augment fake images for G if ADA is used
         if self.ada_manager:
-            fake_images_for_g_aug, _ = self.ada_manager.apply_augmentations(fake_images_for_g)
+            fake_images_for_g_aug = self.ada_manager.apply_augmentations(fake_images_for_g)
+
         else:
             fake_images_for_g_aug = fake_images_for_g
 
