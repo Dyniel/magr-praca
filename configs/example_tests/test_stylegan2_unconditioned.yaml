@@ -2,5 +2,5 @@ model:
   architecture: "stylegan2"
 run_name: "stylegan2_unconditioned"
 num_epochs: 200
-batch_size: 16
+batch_size: 2
 enable_fid_calculation: True

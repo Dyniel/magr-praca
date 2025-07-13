@@ -20,7 +20,7 @@ debug_num_images: 0 # Use a reasonable subset for faster sweeps, e.g., 1000, or 
 
 # --- Training Hyperparameters ---
 # batch_size will be set by individual sweep configs if tuned, otherwise a default here
-batch_size: 4 # Smaller batch size for sweeps to conserve memory / run faster
+batch_size: 2 # Smaller batch size for sweeps to conserve memory / run faster
 num_epochs: 50 # Reduced epochs for sweeps. Adjust as needed.
 # g_lr, d_lr, beta1, beta2, r1_gamma will be tuned by the sweep typically.
 # Defaults for non-tuned optimizer params:
