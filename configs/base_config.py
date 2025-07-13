@@ -167,11 +167,11 @@ class BaseConfig:
     output_dir_base: str = "experiment_outputs"
     run_name: str = "default_run" # Specific name for this run, used for subfolder in output_dir
     # Full path to the dataset
-    dataset_path: str = "dummy_dataset/images"
-    dataset_path_val: Optional[str] = None
-    dataset_path_test: Optional[str] = None
+    dataset_path: str = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train"
+    dataset_path_val: Optional[str] = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/val"
+    dataset_path_test: Optional[str] = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/test"
     # Directory to cache precomputed superpixels
-    cache_dir: str = "dummy_dataset/cache"
+    cache_dir: str = "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/cache"
     num_workers: int = 4 # For DataLoader
     device: str = "cuda" # "cuda" or "cpu". Trainer will verify availability and fallback to CPU if needed.
     use_cuda: bool = True # Explicit flag, though `device` field is primary. Kept for compatibility if Trainer directly uses it.
