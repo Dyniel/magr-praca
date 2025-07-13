@@ -29,13 +29,16 @@ def main():
 
     # Apply command-line overrides
     if unknown_args:
-        try:
-            print(f"Processing dotlist overrides from: {unknown_args}")
-            cli_overrides = OmegaConf.from_dotlist(unknown_args)
-            conf = OmegaConf.merge(conf, cli_overrides)
-            print(f"Applied CLI overrides: {unknown_args}")
-        except Exception as e:
-            print(f"Error applying CLI overrides: {e}.")
+        # Filter out the --config-file argument from the unknown_args list
+        filtered_unknown_args = [arg for arg in unknown_args if not arg.startswith('--config-file')]
+        if filtered_unknown_args:
+            try:
+                print(f"Processing dotlist overrides from: {filtered_unknown_args}")
+                cli_overrides = OmegaConf.from_dotlist(filtered_unknown_args)
+                conf = OmegaConf.merge(conf, cli_overrides)
+                print(f"Applied CLI overrides: {filtered_unknown_args}")
+            except Exception as e:
+                print(f"Error applying CLI overrides: {e}.")
 
     print("\nFinal configuration after all merges:")
     try:
