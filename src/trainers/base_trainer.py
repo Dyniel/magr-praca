@@ -186,4 +186,3 @@ class BaseTrainer(abc.ABC):
                     self.device)
                 z_superpixel_g = self.sp_latent_encoder(mean_sp_feats)
         return spatial_map_g, spatial_map_d, z_superpixel_g
-clear
