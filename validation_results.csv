@@ -1,8 +1,4 @@
 model,status
-test_stylegan2_ada,failed
-test_stylegan3_unconditioned,failed
-test_histogan,failed
-test_stylegan2_superpixel_conditioned,failed
-test_stylegan2_unconditioned,failed
-test_projectedgan_unconditioned,failed
-test_dcgan_unconditioned,failed
+test_projectedgan_unconditioned,success
+test_stylegan3_unconditioned,success
+test_stylegan2_unconditioned,success

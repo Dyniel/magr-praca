@@ -1,52 +1,6 @@
-# Example Test: ProjectedGAN Unconditioned
-project_name: "GAN_Tests"
-run_name: "projectedgan_unconditioned_smoke_test"
-
-dataset_path: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/train"
-dataset_path_val: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/val"
-dataset_path_test: "/home/student2/histo/data/lung_colon_image_set/lung_image_sets/lung_scc/test"
-cache_dir: "./cache_test_projgan_uncond"
-image_size: 64 # ProjectedGAN often uses larger images, but 64 for test
-num_superpixels: 50 # Ignored
-num_workers: 0
-device: "cuda"
-debug_num_images: 8
-batch_size: 2 # StyleGAN2 base
-num_epochs: 1
-
 model:
   architecture: "projected_gan"
-  use_superpixel_conditioning: false
-
-  # ProjectedGAN uses a StyleGAN2 generator, so StyleGAN2 params are relevant
-  stylegan2_z_dim: 256
-  stylegan2_w_dim: 256
-  stylegan2_n_mlp: 4
-  stylegan2_channel_multiplier: 1
-
-  # ProjectedGAN specific params
-  projectedgan_d_channel_multiplier: 1 # Discriminator's own path channel multiplier
-  projectedgan_feature_extractor_name: "resnet50" # Or "efficientnet_b0" - resnet50 is typically less heavy
-  # projectedgan_feature_layers_to_extract: null # Defaults will be used
-  projectedgan_feature_matching_loss_weight: 10.0
-
-optimizer:
-  g_lr: 1e-4
-  d_lr: 1e-4
-  beta1: 0.0
-  beta2: 0.99
-
-logging:
-  use_wandb: true
-  wandb_entity: "ciedaniel"
-
-  wandb_project_name: ${project_name}
-  wandb_run_name: ${run_name}
-  log_freq_step: 10
-  sample_freq_epoch: 1
-  num_samples_to_log: 4
-  checkpoint_freq_epoch: 1
-
-enable_fid_calculation: false
-resume_checkpoint_path: null
-output_dir_base: "experiment_outputs_tests"
+run_name: "projectedgan_unconditioned"
+num_epochs: 200
+batch_size: 16
+enable_fid_calculation: True
