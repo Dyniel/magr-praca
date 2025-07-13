@@ -106,10 +106,18 @@ class BaseTrainer(abc.ABC):
                     print(f"Warning: Could not extract real images for training batch or batch is empty. Skipping.")
                     continue
 
+                # --- Discriminator Training ---
+                if self.current_iteration % self.config.gradient_accumulation_steps == 0:
+                    self.optimizer_D.zero_grad()
+
                 d_logs = self._train_d(real_images_gan_norm, segments_map=segments_map, adj_matrix=adj_matrix, graph_batch_pyg=graph_batch_pyg)
                 logs.update(d_logs)
 
+                # --- Generator Training ---
                 if self.current_iteration % self.config.d_updates_per_g_update == 0:
+                    if self.current_iteration % self.config.gradient_accumulation_steps == 0:
+                        self.optimizer_G.zero_grad()
+
                     g_logs = self._train_g(real_images_gan_norm, segments_map=segments_map, adj_matrix=adj_matrix, graph_batch_pyg=graph_batch_pyg)
                     logs.update(g_logs)
 
