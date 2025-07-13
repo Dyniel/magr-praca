@@ -73,8 +73,11 @@ class StyleGAN2Trainer(BaseTrainer):
 
         if self.r1_gamma > 0:
             r1_loss = r1_penalty(d_real_logits, d_input_real_images, self.r1_gamma)
-            lossD += r1_loss
-            logs["Loss_D_R1"] = r1_loss.item()
+            if torch.isnan(r1_loss):
+                print("R1 loss is nan. Skipping R1 penalty.")
+            else:
+                lossD += r1_loss
+            logs["Loss_D_R1"] = r1_loss.item() if not torch.isnan(r1_loss) else "nan"
 
         lossD.backward()
         self.optimizer_D.step()

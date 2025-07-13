@@ -23,6 +23,12 @@ def r1_penalty(d_real_logits, real_images, r1_gamma):
         outputs=d_real_logits.sum(), inputs=real_images, create_graph=True
     )[0]
 
+    print(f"Grad Real: min={grad_real.min().item():.4f}, max={grad_real.max().item():.4f}, mean={grad_real.mean().item():.4f}")
+
     grad_penalty = grad_real.pow(2).view(grad_real.shape[0], -1).sum(1).mean()
+
+    if torch.isnan(grad_penalty):
+        print("Grad penalty is nan. Returning 0.")
+        return torch.tensor(0.0, device=real_images.device)
 
     return grad_penalty * (r1_gamma / 2)
