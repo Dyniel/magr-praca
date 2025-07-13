@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from src.trainers.base_trainer import BaseTrainer
 from src.models import StyleGAN3Generator, StyleGAN3Discriminator
 from src.utils import toggle_grad
-from src.losses.adversarial import r1_penalty, generator_loss_nonsaturating, discriminator_loss_r1
+from src.losses.adversarial import compute_grad_penalty, generator_loss_nonsaturating, discriminator_loss_r1
 
 class StyleGAN3Trainer(BaseTrainer):
     def _init_models(self):
