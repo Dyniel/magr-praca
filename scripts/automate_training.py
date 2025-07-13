@@ -87,7 +87,7 @@ def run_single_experiment(exp_config: dict, base_cfg_obj: OmegaConf):
         # Using python -m is generally more robust for module resolution
         command = [
             "python", "-m", "scripts.train",
-            "--config_file", temp_config_path
+            "--config-file", temp_config_path
         ]
         print(f"Executing command: {' '.join(command)}")
 
