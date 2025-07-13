@@ -69,7 +69,7 @@ class StyleGAN2Trainer(BaseTrainer):
         logs = {"Loss_D_Adv": lossD.item()}
 
         if self.r1_gamma > 0:
-            r1_penalty = compute_grad_penalty(d_real_logits, real_images) * self.r1_gamma / 2
+            r1_penalty = compute_grad_penalty(d_real_logits, d_input_real_images) * self.r1_gamma / 2
             lossD += r1_penalty
             logs["Loss_D_R1"] = r1_penalty.item()
 
