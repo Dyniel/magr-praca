@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 import abc
 
 from src.data_loader import get_dataloader
-from src.utils import denormalize_image, generate_spatial_superpixel_map, calculate_mean_superpixel_features, toggle_grad
+from src.utils import denormalize_image, generate_spatial_superpixel_map, calculate_mean_superpixel_features, toggle_grad, log_image_grid_to_wandb
 from src.models.superpixel_encoder import SuperpixelLatentEncoder
 from src.losses.adversarial import r1_penalty
 
@@ -79,8 +79,11 @@ class BaseTrainer(abc.ABC):
         print(f"Starting training for {self.config.num_epochs} epochs...")
         train_dataloader = get_dataloader(self.config, data_split="train", shuffle=True, drop_last=True)
         if train_dataloader is None:
-            print("No training dataloader found. Exiting.")
+            print("No training dataloaloader found. Exiting.")
             return
+
+        log_freq_step = max(1, len(train_dataloader) // 10)
+        print(f"Logging metrics every {log_freq_step} steps.")
 
         for epoch in range(self.current_epoch, self.config.num_epochs):
             self.current_epoch = epoch
@@ -99,8 +102,8 @@ class BaseTrainer(abc.ABC):
                 logs = {}
 
                 real_images_gan_norm, segments_map, adj_matrix, graph_batch_pyg = self._unpack_batch(raw_batch_data)
-                if real_images_gan_norm is None:
-                    print(f"Warning: Could not extract real images for training batch. Skipping.")
+                if real_images_gan_norm is None or real_images_gan_norm.size(0) == 0:
+                    print(f"Warning: Could not extract real images for training batch or batch is empty. Skipping.")
                     continue
 
                 d_logs = self._train_d(real_images_gan_norm, segments_map=segments_map, adj_matrix=adj_matrix, graph_batch_pyg=graph_batch_pyg)
@@ -110,16 +113,24 @@ class BaseTrainer(abc.ABC):
                     g_logs = self._train_g(real_images_gan_norm, segments_map=segments_map, adj_matrix=adj_matrix, graph_batch_pyg=graph_batch_pyg)
                     logs.update(g_logs)
 
-                if hasattr(self.config, 'logging') and self.current_iteration % self.config.logging.log_freq_step == 0:
+                if self.current_iteration % log_freq_step == 0:
                     batch_iterator.set_postfix(logs)
                     if self.config.logging.use_wandb and wandb.run:
                         wandb.log(logs, step=self.current_iteration)
-                elif self.current_iteration % getattr(self.config, 'log_freq_step', 100) == 0:
-                    batch_iterator.set_postfix(logs)
-                    if getattr(self.config, 'use_wandb', False) and wandb.run:
-                        wandb.log(logs, step=self.current_iteration)
 
                 # ... (sample logging and checkpointing logic will be added here)
+
+            if (epoch + 1) % 10 == 0:
+                self.G.eval()
+                with torch.no_grad():
+                    z_noise = torch.randn(self.config.batch_size, self.config.model.stylegan2_z_dim, device=self.device)
+                    g_kwargs = {
+                        'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9),
+                        'truncation_psi': None
+                    }
+                    fake_images = self.G(z_noise, **g_kwargs)
+                    log_image_grid_to_wandb(denormalize_image(fake_images), wandb.run, f"Generated Images Epoch {epoch+1}", self.current_iteration)
+                self.G.train()
 
             print(f"Epoch {epoch+1} completed.")
 
@@ -175,3 +186,4 @@ class BaseTrainer(abc.ABC):
                     self.device)
                 z_superpixel_g = self.sp_latent_encoder(mean_sp_feats)
         return spatial_map_g, spatial_map_d, z_superpixel_g
+clear

@@ -12,6 +12,7 @@ from src.utils import (
     # Removed: convert_image_to_pyg_graph, PYG_AVAILABLE
 )
 
+
 # Removed PyTorch Geometric imports as ImageToGraphDataset is being removed
 # if PYG_AVAILABLE:
 #     from torch_geometric.data import Batch as PyGBatch
@@ -143,6 +144,8 @@ class SuperpixelDataset(Dataset):  # For models needing precomputed superpixels,
             if self.transform:
                 try:
                     image_tensor = self.transform(image)
+                    print(
+                        f"DEBUG: SuperpixelDataset - Image {img_path} transformed. Tensor stats: min={image_tensor.min()}, max={image_tensor.max()}, mean={image_tensor.mean()}")
                 except Exception as e:
                     print(f"ERROR: SuperpixelDataset - Error applying transform to image {img_path}: {e}")
                     # This could be where the ResizePIL error (now TypeError) is caught
@@ -176,6 +179,7 @@ class SuperpixelDataset(Dataset):  # For models needing precomputed superpixels,
             # Catch-all for any unexpected errors within the top-level try for this item
             print(f"CRITICAL ERROR in SuperpixelDataset.__getitem__ for {img_path}: {e}. Returning None.")
             return None
+
 
 # Removed ImageToGraphDataset and collate_graphs as gan6_gat_cnn is removed
 
@@ -212,9 +216,9 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
             image_paths = image_paths[:num_debug]
 
     dataset_type = getattr(config.model, "architecture", "gan5_gcn")
-    use_sp_conditioning = getattr(config.model, "use_superpixel_conditioning", False) # Default to False if not present
+    use_sp_conditioning = getattr(config.model, "use_superpixel_conditioning", False)  # Default to False if not present
     dataset = None
-    collate_fn_to_use = None # Default collate_fn will be used if this remains None
+    collate_fn_to_use = None  # Default collate_fn will be used if this remains None
 
     # Architectures that can run in a "standard" (non-superpixel-conditioned) mode
     standard_gan_architectures = ["dcgan", "stylegan2", "stylegan3", "projected_gan", "histogan"]
@@ -223,11 +227,12 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
     # Removed 'cyclegan' specific path.
 
     if dataset_type in standard_gan_architectures:
-      
+
         if use_sp_conditioning:
             # These GANs, when conditioned, will use C1, C2, C4 which rely on superpixel segments
             # and mean features derived from them. So, SuperpixelDataset is appropriate.
-            print(f"Using SuperpixelDataset for {data_split} ({dataset_type} architecture with superpixel conditioning).")
+            print(
+                f"Using SuperpixelDataset for {data_split} ({dataset_type} architecture with superpixel conditioning).")
             dataset = SuperpixelDataset(image_paths=image_paths, config=config, data_split_name=data_split)
         else:
             # Standard GAN mode, no superpixel conditioning. Use the simple ImageDataset.
@@ -237,8 +242,8 @@ def get_dataloader(config, data_split="train", shuffle=True, drop_last=True):
     # Fallback or error for unknown architectures
     # Now, if it's not in standard_gan_architectures, it's an error.
     else:
-        raise ValueError(f"Unsupported or unknown model.architecture: {dataset_type} in get_dataloader. Supported: {standard_gan_architectures}")
-
+        raise ValueError(
+            f"Unsupported or unknown model.architecture: {dataset_type} in get_dataloader. Supported: {standard_gan_architectures}")
 
     # Determine batch size: use eval_batch_size for val/test if defined, else main batch_size
     current_batch_size = config.batch_size
@@ -267,16 +272,17 @@ class ImageDataset(Dataset):
     Applies basic transformations like resize and normalization.
     Returns a dictionary containing the image tensor and its path.
     """
+
     def __init__(self, image_paths, config, data_split_name="train", transform=None):
         self.image_paths = image_paths
-        self.config = config # Keep the whole config for access to image_size, etc.
+        self.config = config  # Keep the whole config for access to image_size, etc.
         self.data_split_name = data_split_name
 
         if transform is None:
             self.transform = transforms.Compose([
                 ResizePIL((config.image_size, config.image_size)),
                 ImageToTensor(),
-                transforms.Lambda(normalize_image) # Assumes normalize_image is defined in utils
+                transforms.Lambda(normalize_image)  # Assumes normalize_image is defined in utils
             ])
         else:
             self.transform = transform
@@ -294,7 +300,7 @@ class ImageDataset(Dataset):
                 image = Image.open(img_path).convert("RGB")
             except FileNotFoundError:
                 print(f"ERROR: ImageDataset - Image file not found: {img_path}")
-                return None # Indicate failure for this sample
+                return None  # Indicate failure for this sample
             except Exception as e:
                 print(f"ERROR: ImageDataset - Error loading image {img_path}: {e}")
                 return None
@@ -303,11 +309,13 @@ class ImageDataset(Dataset):
             if self.transform:
                 try:
                     image_tensor = self.transform(image)
+                    print(
+                        f"DEBUG: ImageDataset - Image {img_path} transformed. Tensor stats: min={image_tensor.min()}, max={image_tensor.max()}, mean={image_tensor.mean()}")
                 except Exception as e:
                     print(f"ERROR: ImageDataset - Error applying transform to image {img_path}: {e}")
                     return None
-            else: # Should always have a default transform
-                image_tensor = image # Fallback, though unlikely if default transform is set
+            else:  # Should always have a default transform
+                image_tensor = image  # Fallback, though unlikely if default transform is set
 
             if image_tensor is None:
                 print(f"ERROR: ImageDataset - Image tensor is None for {img_path} after processing. Returning None.")

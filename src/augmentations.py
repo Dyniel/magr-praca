@@ -85,6 +85,8 @@ class ADAManager:
         if self.p_aug == 0:
             return images_batch
 
+        print(f"DEBUG: ADAManager - Before augmentation. Tensor stats: min={images_batch.min()}, max={images_batch.max()}, mean={images_batch.mean()}")
+
         # This is where a real GPU-based augmentation pipeline (e.g., kornia) would be used.
         # For simplicity, let's simulate a few basic augmentations that are batch-compatible.
         # This is NOT a complete ADA pipeline from the paper.
@@ -111,6 +113,8 @@ class ADAManager:
         # on batches with only basic PyTorch without a library like Kornia.
         # A full implementation would require more sophisticated ops here.
         # "imgcrop", "geom" would need kornia.augmentation.RandomResizedCrop, RandomAffine etc.
+
+        print(f"DEBUG: ADAManager - After augmentation. Tensor stats: min={augmented_images.min()}, max={augmented_images.max()}, mean={augmented_images.mean()}")
 
         return augmented_images
 

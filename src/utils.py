@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn as F
+import torch.nn.functional as F
+import wandb
+from torchvision.utils import make_grid
 import numpy as np
 from skimage.segmentation import relabel_sequential
 import os
@@ -480,6 +482,15 @@ def toggle_grad(model, requires_grad):
     """
     for p in model.parameters():
         p.requires_grad_(requires_grad)
+
+
+def log_image_grid_to_wandb(images, wandb_run, caption, step):
+    """
+    Logs a grid of images to W&B.
+    """
+    if wandb_run:
+        grid = make_grid(images)
+        wandb_run.log({caption: [wandb.Image(grid, caption=caption)]}, step=step)
 
 
 print("src/utils.py created and populated.")

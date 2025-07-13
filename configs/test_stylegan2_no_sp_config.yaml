@@ -35,7 +35,8 @@ optimizer:
   d_lr: 1e-5
 
 logging:
-  use_wandb: False
+  use_wandb: True
+  wandb_entity: "ciedaniel"
   log_freq_step: 1
   sample_freq_epoch: 1 # Irrelevant as epochs=1
   checkpoint_freq_epoch: 1
