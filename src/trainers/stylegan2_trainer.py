@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from src.trainers.base_trainer import BaseTrainer
 from src.models import StyleGAN2Generator, StyleGAN2Discriminator
-from src.utils import toggle_grad, compute_grad_penalty
+from src.utils import toggle_grad
 from src.losses.adversarial import r1_penalty, generator_loss_nonsaturating, discriminator_loss_r1
 from src.augmentations import ADAManager
 
@@ -69,9 +69,9 @@ class StyleGAN2Trainer(BaseTrainer):
         logs = {"Loss_D_Adv": lossD.item()}
 
         if self.r1_gamma > 0:
-            r1_penalty = compute_grad_penalty(d_real_logits, d_input_real_images) * self.r1_gamma / 2
-            lossD += r1_penalty
-            logs["Loss_D_R1"] = r1_penalty.item()
+            r1_loss = r1_penalty(d_real_logits, d_input_real_images, self.r1_gamma)
+            lossD += r1_loss
+            logs["Loss_D_R1"] = r1_loss.item()
 
         lossD.backward()
         self.optimizer_D.step()

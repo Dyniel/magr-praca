@@ -482,21 +482,4 @@ def toggle_grad(model, requires_grad):
         p.requires_grad_(requires_grad)
 
 
-def compute_grad_penalty(d_out, x_in):
-    """
-    Computes the R1 gradient penalty.
-    d_out: Discriminator output tensor (logits for real images).
-    x_in: Real images tensor.
-    """
-    batch_size = x_in.size(0)
-    grad_dout = torch.autograd.grad(
-        outputs=d_out.sum(), inputs=x_in,
-        create_graph=True, retain_graph=True, only_inputs=True
-    )[0]
-    grad_dout2 = grad_dout.pow(2)
-    assert(grad_dout2.size() == x_in.size())
-    reg = grad_dout2.view(batch_size, -1).sum(1)
-    return reg.mean()
-
-
 print("src/utils.py created and populated.")
