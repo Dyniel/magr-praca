@@ -67,6 +67,9 @@ class StyleGAN2Trainer(BaseTrainer):
 
         lossD = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
         logs = {"Loss_D_Adv": lossD.item()}
+        print(f"D Real Logits: min={d_real_logits.min().item():.4f}, max={d_real_logits.max().item():.4f}, mean={d_real_logits.mean().item():.4f}")
+        print(f"D Fake Logits: min={d_fake_logits.min().item():.4f}, max={d_fake_logits.max().item():.4f}, mean={d_fake_logits.mean().item():.4f}")
+        print(f"Loss D Adv: {lossD.item():.4f}")
 
         if self.r1_gamma > 0:
             r1_loss = r1_penalty(d_real_logits, d_input_real_images, self.r1_gamma)
@@ -96,6 +99,8 @@ class StyleGAN2Trainer(BaseTrainer):
         lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
         logs = {"Loss_G_Adv": lossG_adv.item()}
         lossG = lossG_adv
+        print(f"G Fake Logits: min={d_fake_logits_for_g.min().item():.4f}, max={d_fake_logits_for_g.max().item():.4f}, mean={d_fake_logits_for_g.mean().item():.4f}")
+        print(f"Loss G Adv: {lossG_adv.item():.4f}")
 
         lossG.backward()
         self.optimizer_G.step()

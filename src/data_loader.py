@@ -144,8 +144,6 @@ class SuperpixelDataset(Dataset):  # For models needing precomputed superpixels,
             if self.transform:
                 try:
                     image_tensor = self.transform(image)
-                    print(
-                        f"DEBUG: SuperpixelDataset - Image {img_path} transformed. Tensor stats: min={image_tensor.min()}, max={image_tensor.max()}, mean={image_tensor.mean()}")
                 except Exception as e:
                     print(f"ERROR: SuperpixelDataset - Error applying transform to image {img_path}: {e}")
                     # This could be where the ResizePIL error (now TypeError) is caught
@@ -309,8 +307,6 @@ class ImageDataset(Dataset):
             if self.transform:
                 try:
                     image_tensor = self.transform(image)
-                    print(
-                        f"DEBUG: ImageDataset - Image {img_path} transformed. Tensor stats: min={image_tensor.min()}, max={image_tensor.max()}, mean={image_tensor.mean()}")
                 except Exception as e:
                     print(f"ERROR: ImageDataset - Error applying transform to image {img_path}: {e}")
                     return None
