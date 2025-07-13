@@ -51,7 +51,7 @@ class StyleGAN2Trainer(BaseTrainer):
 
         d_input_real_images = real_images
         if self.ada_manager:
-            d_input_real_images = self.ada_manager.apply_augmentations(real_images)
+            d_input_real_images, _ = self.ada_manager.apply_augmentations(real_images)
 
         d_real_logits = self.D(d_input_real_images)
 
@@ -122,6 +122,7 @@ class StyleGAN2Trainer(BaseTrainer):
         # Augment fake images for G if ADA is used
         if self.ada_manager:
             fake_images_for_g_aug = self.ada_manager.apply_augmentations(fake_images_for_g)
+
         else:
             fake_images_for_g_aug = fake_images_for_g
 
