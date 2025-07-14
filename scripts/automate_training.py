@@ -37,7 +37,7 @@ def get_experiment_configurations() -> list[dict]:
             "model.architecture": model_architecture,
             "run_name": run_name,
             "num_epochs": 30,
-            "batch_size": 32,
+            "batch_size": 2,
             "enable_fid_calculation": True,
         }
 
@@ -57,7 +57,7 @@ def get_experiment_configurations() -> list[dict]:
                 "model.architecture": "dcgan",
                 "run_name": "dcgan_unconditioned",
                 "num_epochs": 30,
-                "batch_size": 32,
+                "batch_size": 2,
                 "enable_fid_calculation": True,
             }
         })
