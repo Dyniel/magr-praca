@@ -6,7 +6,7 @@ from src.trainers.base_trainer import BaseTrainer
 from src.models import ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor
 from src.utils import toggle_grad, denormalize_image
 from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
-from src.trainers.base_trainer import BaseTrainer
+
 
 class ProjectedGANTrainer(BaseTrainer):
     def _init_models(self):

@@ -8,6 +8,7 @@ from src.utils import toggle_grad
 from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
 from src.trainers.base_trainer import BaseTrainer
 
+
 class StyleGAN3Trainer(BaseTrainer):
     def _init_models(self):
         self.G = StyleGAN3Generator(self.config).to(self.device)
