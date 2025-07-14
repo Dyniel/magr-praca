@@ -1,12 +1,11 @@
 import torch
 import torch.optim as optim
-import torch.nn.functional as F
 import torch.nn as nn
 
 from src.trainers.base_trainer import BaseTrainer
 from src.models import ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor
 from src.utils import toggle_grad, denormalize_image
-from src.losses.adversarial import r1_penalty, generator_loss_nonsaturating, discriminator_loss_r1
+from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
 
 class ProjectedGANTrainer(BaseTrainer):
     def _init_models(self):
@@ -35,17 +34,14 @@ class ProjectedGANTrainer(BaseTrainer):
         )
 
     def _init_loss_functions(self):
-        self.r1_gamma = self.config.r1_gamma
-        self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
-        self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
-            F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
+        self.loss_fn_g_adv = generator_loss_bce
+        self.loss_fn_d_adv = discriminator_loss_bce
         self.loss_fn_g_feat_match = nn.MSELoss()
 
     def _train_d(self, real_images, **kwargs):
         toggle_grad(self.D, True)
         self.optimizer_D.zero_grad()
 
-        real_images.requires_grad = (self.r1_gamma > 0)
         d_real_logits = self.D(real_images)
 
         z_dim_to_use = self.config.model.stylegan2_z_dim # ProjectedGAN uses StyleGAN2's z_dim
@@ -58,11 +54,6 @@ class ProjectedGANTrainer(BaseTrainer):
 
         lossD = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
         logs = {"Loss_D_Adv": lossD.item()}
-
-        if self.r1_gamma > 0:
-            r1_penalty = compute_grad_penalty(d_real_logits, real_images) * self.r1_gamma / 2
-            lossD += r1_penalty
-            logs["Loss_D_R1"] = r1_penalty.item()
 
         lossD.backward()
         self.optimizer_D.step()
