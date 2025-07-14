@@ -67,5 +67,12 @@ def gradient_penalty(discriminator, real_images, fake_images, device):
     )[0]
 
     gradients = gradients.view(batch_size, -1)
-    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+    gradient_norm = gradients.norm(2, dim=1)
+    gradient_penalty = ((gradient_norm - 1) ** 2).mean()
+
+    # Check for inf values, which can destabilize training.
+    if torch.isinf(gradient_penalty):
+        print("Warning: gradient penalty is inf. Clipping to a large value.")
+        return torch.tensor(1e6, device=device, requires_grad=True)
+
     return gradient_penalty
