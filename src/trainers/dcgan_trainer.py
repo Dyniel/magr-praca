@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from src.trainers.base_trainer import BaseTrainer
 from src.models import DCGANGenerator, DCGANDiscriminator
 from src.utils import toggle_grad
-from src.losses.adversarial import r1_penalty, generator_loss_bce, discriminator_loss_bce
+from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
 
 class DCGANTrainer(BaseTrainer):
     def _init_models(self):
@@ -28,7 +28,6 @@ class DCGANTrainer(BaseTrainer):
         )
 
     def _init_loss_functions(self):
-        self.r1_gamma = self.config.r1_gamma
         self.loss_fn_g_adv = lambda d_fake_logits: F.binary_cross_entropy_with_logits(d_fake_logits, torch.ones_like(d_fake_logits))
         self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
             F.binary_cross_entropy_with_logits(d_real_logits, torch.ones_like(d_real_logits)) + \
@@ -38,7 +37,6 @@ class DCGANTrainer(BaseTrainer):
         toggle_grad(self.D, True)
         self.optimizer_D.zero_grad()
 
-        real_images.requires_grad = (self.r1_gamma > 0)
 
         d_real_logits = self.D(real_images)
 
@@ -53,10 +51,6 @@ class DCGANTrainer(BaseTrainer):
         lossD = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
         logs = {"Loss_D_Adv": lossD.item()}
 
-        if self.r1_gamma > 0:
-            r1_penalty = compute_grad_penalty(d_real_logits, real_images) * self.r1_gamma / 2
-            lossD += r1_penalty
-            logs["Loss_D_R1"] = r1_penalty.item()
 
         lossD.backward()
         self.optimizer_D.step()
