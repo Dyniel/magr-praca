@@ -170,7 +170,7 @@ class StyleGAN2Discriminator(nn.Module):
         if self.config_model.stylegan2_d_spatial_cond:
             from_rgb_in_channels += self.config_model.superpixel_spatial_map_channels_d
 
-        convs.append(EqualizedConv2d(from_rgb_in_channels, self.channels[self.image_size], 1, activation='lrelu'))
+        convs.append(torch.nn.utils.spectral_norm(EqualizedConv2d(from_rgb_in_channels, self.channels[self.image_size], 1, activation='lrelu')))
 
         in_ch = self.channels[self.image_size]
         for i in range(self.log_size, 2, -1):
@@ -180,9 +180,9 @@ class StyleGAN2Discriminator(nn.Module):
 
         convs.append(ConvBlock(in_ch, self.channels[4], 3))
         final_conv_channels = self.channels[4]
-        convs.append(EqualizedConv2d(final_conv_channels, final_conv_channels, 4, padding=0))
+        convs.append(torch.nn.utils.spectral_norm(EqualizedConv2d(final_conv_channels, final_conv_channels, 4, padding=0)))
         convs.append(nn.Flatten())
-        convs.append(EqualizedLinear(final_conv_channels, 1))
+        convs.append(torch.nn.utils.spectral_norm(EqualizedLinear(final_conv_channels, 1)))
 
         self.convs = nn.Sequential(*convs)
 
