@@ -19,7 +19,7 @@ from src.losses.adversarial import r1_penalty
 
 class BaseTrainer(abc.ABC):
     def __init__(self, config):
-        self.config = OmegaConf.to_object(config)
+        self.config = config
         self._init_wandb()
 
         if self.config.device == "cuda" and not torch.cuda.is_available():
