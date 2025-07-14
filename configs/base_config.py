@@ -12,6 +12,7 @@ class LoggingConfig:
     wandb_watch_freq_g: int = 1000           # How often to log gradients/parameters for G
     wandb_watch_freq_d: int = 1000           # How often to log gradients/parameters for D
     log_freq_step: int = 100
+    image_log_freq: int = 500
     sample_freq_epoch: int = 1
     num_samples_to_log: int = 10
     checkpoint_freq_epoch: int = 10

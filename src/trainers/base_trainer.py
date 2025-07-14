@@ -138,7 +138,8 @@ class BaseTrainer(abc.ABC):
                         'truncation_psi': None
                     }
                     fake_images = self.G(z_noise, **g_kwargs)
-                    log_image_grid_to_wandb(denormalize_image(fake_images), wandb.run, f"Generated Images Epoch {epoch+1}", self.current_iteration)
+                    if self.config.logging.use_wandb and wandb.run:
+                        log_image_grid_to_wandb(denormalize_image(fake_images), wandb.run, f"Generated Images Epoch {epoch+1}", self.current_iteration)
                 self.G.train()
 
             print(f"Epoch {epoch+1} completed.")
