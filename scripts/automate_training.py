@@ -36,7 +36,7 @@ def get_experiment_configurations() -> list[dict]:
         overrides = {
             "model.architecture": model_architecture,
             "run_name": run_name,
-            "num_epochs": 200,
+            "num_epochs": 30,
             "batch_size": 32,
             "enable_fid_calculation": True,
         }
@@ -45,6 +45,21 @@ def get_experiment_configurations() -> list[dict]:
             "name": run_name,
             "model_architecture": model_architecture,
             "config_overrides": overrides
+        })
+
+    # Add DCGAN manually if no specific config file exists
+    dcgan_present = any([exp['model_architecture'] == 'dcgan' for exp in experiments])
+    if not dcgan_present:
+        experiments.append({
+            "name": "dcgan_unconditioned",
+            "model_architecture": "dcgan",
+            "config_overrides": {
+                "model.architecture": "dcgan",
+                "run_name": "dcgan_unconditioned",
+                "num_epochs": 30,
+                "batch_size": 32,
+                "enable_fid_calculation": True,
+            }
         })
 
     return experiments
