@@ -212,7 +212,7 @@ class BaseConfig:
     # --- FID Configuration (kept separate for now or could be part of LoggingConfig) ---
     # fid_incep_path: str = "path/to/inception_v3_fid.pt" # Not used if using pytorch-fid's default
     fid_num_images: int = 5000 # Number of real/fake images to use for FID
-    fid_batch_size: int = 2   # Batch size for generating images for FID
+    fid_batch_size: int = 8   # Batch size for generating images for FID
     fid_freq_epoch: int = 5    # How often (in epochs) to calculate FID. Can be expensive.
     # path_to_real_images_for_fid: str = None # Optional: path to a pre-selected dir of real images for FID consistency. If None, uses current dataset.
     # enable_fid_calculation: bool = False # Set to True in experiment YAML to enable
