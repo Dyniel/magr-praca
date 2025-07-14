@@ -208,17 +208,17 @@ class ConvBlock(nn.Module):
     def __init__(self, in_channel, out_channel, kernel_size, downsample=False, blur_kernel=[1, 3, 3, 1],
                  activation='lrelu'):
         super().__init__()
-        self.conv1 = EqualizedConv2d(in_channel, in_channel, kernel_size, padding=kernel_size // 2,
-                                     activation=activation)
+        self.conv1 = torch.nn.utils.spectral_norm(EqualizedConv2d(in_channel, in_channel, kernel_size, padding=kernel_size // 2,
+                                     activation=activation))
         if downsample:
             self.blur = Blur(blur_kernel, pad=((len(blur_kernel) - 1) // 2, (len(blur_kernel) - 1) // 2),
                              downsample_factor=2)
-            self.conv2 = EqualizedConv2d(in_channel, out_channel, kernel_size, padding=kernel_size // 2,
-                                         activation=activation)
+            self.conv2 = torch.nn.utils.spectral_norm(EqualizedConv2d(in_channel, out_channel, kernel_size, padding=kernel_size // 2,
+                                         activation=activation))
         else:
             self.blur = None
-            self.conv2 = EqualizedConv2d(in_channel, out_channel, kernel_size, padding=kernel_size // 2,
-                                         activation=activation)
+            self.conv2 = torch.nn.utils.spectral_norm(EqualizedConv2d(in_channel, out_channel, kernel_size, padding=kernel_size // 2,
+                                         activation=activation))
         self.downsample = downsample
 
     def forward(self, x):

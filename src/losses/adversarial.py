@@ -47,33 +47,24 @@ def discriminator_loss_wgan(d_real_logits, d_fake_logits):
     """
     return d_fake_logits.mean() - d_real_logits.mean()
 
-def gradient_penalty(discriminator, real_images, fake_images, device):
-    """
-    Calculates the gradient penalty for WGAN-GP.
-    """
-    batch_size, c, h, w = real_images.shape
-    alpha = torch.rand(batch_size, 1, 1, 1).to(device)
-    interpolated_images = (alpha * real_images + (1 - alpha) * fake_images).requires_grad_(True)
+def gradient_penalty(discriminator, real, fake, device):
+    α = torch.rand(real.size(0), 1, 1, 1, device=device)
+    x_hat = (α * real + (1-α) * fake).requires_grad_(True)
+    d_hat = discriminator(x_hat)
 
-    d_interpolated_logits = discriminator(interpolated_images)
-    grad_outputs = torch.ones_like(d_interpolated_logits, device=device)
+    grads = torch.autograd.grad(
+        outputs=d_hat.sum(), inputs=x_hat, create_graph=True
+    )[0].view(real.size(0), -1)
+    grad_norm = grads.norm(2, dim=1)
 
-    gradients = torch.autograd.grad(
-        outputs=d_interpolated_logits,
-        inputs=interpolated_images,
-        grad_outputs=grad_outputs,
-        create_graph=True,
-        only_inputs=True
-    )[0]
+    # karz tylko, gdy ||∇|| > 1
+    penalty = ((grad_norm - 1).clamp(min=0) ** 2).mean()
+    return penalty
 
-    gradients = gradients.view(batch_size, -1)
-    gradient_norm = gradients.norm(2, dim=1)
-    print("grad_norm:", gradient_norm.min().item(), gradient_norm.max().item())
-    gradient_penalty = ((gradient_norm - 1) ** 2).mean()
+def generator_loss_hinge(d_fake_logits):
+    return -d_fake_logits.mean()
 
-    # Check for inf values, which can destabilize training.
-    if torch.isinf(gradient_penalty):
-        print("Warning: gradient penalty is inf. Clipping to a large value.")
-        return torch.tensor(1e6, device=device, requires_grad=True)
-
-    return gradient_penalty
+def discriminator_loss_hinge(d_real_logits, d_fake_logits):
+    real_loss = F.relu(1.0 - d_real_logits).mean()
+    fake_loss = F.relu(1.0 + d_fake_logits).mean()
+    return real_loss + fake_loss

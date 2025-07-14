@@ -202,7 +202,7 @@ class BaseConfig:
     r1_gamma: float = 5.0 # R1 gradient penalty weight for Discriminator. This is sweepable directly.
     # d_steps_per_g_step: int = 2 # Number of D updates per G update (from gan5)
     # Let's rename for clarity:
-    d_updates_per_g_update: int = 2
+    d_updates_per_g_update: int = 1
     gradient_accumulation_steps: int = 1 # Number of steps to accumulate gradients before optimizer step
 
     # --- Logging Configuration ---
