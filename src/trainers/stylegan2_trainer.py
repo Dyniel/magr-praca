@@ -75,13 +75,15 @@ class StyleGAN2Trainer(BaseTrainer):
         logs = {"Loss_D_Adv": lossD_adv.item(), "GP": gp.item()}
 
         lossD = lossD / self.config.gradient_accumulation_steps
-        lossD.backward()
+        with torch.autograd.set_detect_anomaly(True):
+            lossD.backward()
 
         if not is_accumulation_step:
             if any(torch.isnan(p.grad).any() for p in self.D.parameters() if p.grad is not None):
                 print("Warning: NaN gradients in Discriminator. Skipping optimizer step.")
                 self.optimizer_D.zero_grad()
             else:
+                torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
                 self.optimizer_D.step()
                 self.optimizer_D.zero_grad()
 

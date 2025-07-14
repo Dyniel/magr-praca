@@ -24,10 +24,10 @@ class LoggingConfig:
 class OptimizerConfig:
     """Configuration for optimizers."""
     g_lr: float = 5e-5
-    d_lr: float = 2e-4
+    d_lr: float = 1e-4
     beta1: float = 0.0 # Adam optimizer beta1 for G and D
     beta2: float = 0.99 # Adam optimizer beta2 for G and D
-    lambda_gp: float = 10.0
+    lambda_gp: float = 1.0
     # Potentially add separate betas for G and D if needed:
     # g_beta1: float = 0.0
     # g_beta2: float = 0.99
