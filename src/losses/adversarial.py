@@ -63,7 +63,6 @@ def gradient_penalty(discriminator, real_images, fake_images, device):
         inputs=interpolated_images,
         grad_outputs=grad_outputs,
         create_graph=True,
-        retain_graph=True,
         only_inputs=True
     )[0]
 

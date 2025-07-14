@@ -56,8 +56,7 @@ class StyleGAN2Trainer(BaseTrainer):
             'truncation_psi': None
         }
 
-        with torch.no_grad():
-            fake_images = self.G(z_noise, **g_kwargs)
+        fake_images = self.G(z_noise, **g_kwargs)
 
         d_fake_logits = self.D(fake_images.detach())
 
