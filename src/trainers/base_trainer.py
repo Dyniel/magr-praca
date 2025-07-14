@@ -16,6 +16,7 @@ from src.utils import (
 )
 from src.models.superpixel_encoder import SuperpixelLatentEncoder
 from src.losses.adversarial import r1_penalty
+from src.metrics import calculate_fid
 
 class BaseTrainer(abc.ABC):
     def __init__(self, config):
@@ -155,6 +156,26 @@ class BaseTrainer(abc.ABC):
                             self.current_iteration,
                             wandb.Image(denormalized_samples[i])
                         )
+
+                # Calculate FID
+                if self.config.logging.calculate_fid:
+                    print("Calculating FID...")
+                    # Generate a larger batch of fake images for FID calculation
+                    z_noise_fid = torch.randn(self.config.logging.fid_num_images, self.config.model.stylegan2_z_dim, device=self.device)
+                    fake_images_fid = self.G(z_noise_fid, **g_kwargs)
+
+                    # Get a batch of real images
+                    real_images_fid, _, _, _ = self._unpack_batch(next(iter(train_dataloader)))
+
+                    # Denormalize images for FID calculation
+                    fake_images_fid_denorm = denormalize_image(fake_images_fid)
+                    real_images_fid_denorm = denormalize_image(real_images_fid)
+
+                    fid_score = calculate_fid(real_images_fid_denorm, fake_images_fid_denorm, self.config.batch_size, self.device.type == 'cuda')
+                    if self.config.logging.use_wandb and wandb.run:
+                        wandb.log({"FID": fid_score}, step=self.current_iteration)
+                    print(f"FID at epoch {epoch+1}: {fid_score}")
+
 
             self.G.train()
 

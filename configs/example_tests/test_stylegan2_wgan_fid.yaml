@@ -1,0 +1,13 @@
+model:
+  architecture: "stylegan2"
+run_name: "stylegan2_wgan_fid"
+num_epochs: 1
+batch_size: 2
+gradient_accumulation_steps: 2
+
+optimizer:
+  lambda_gp: 10
+
+logging:
+  calculate_fid: true
+  fid_num_images: 128

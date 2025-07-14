@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from src.models import StyleGAN2Generator, StyleGAN2Discriminator
 from src.utils import toggle_grad
-from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
+from src.losses.adversarial import generator_loss_wgan, discriminator_loss_wgan, gradient_penalty
 from src.augmentations import ADAManager
 from src.trainers.base_trainer import BaseTrainer
 
@@ -35,15 +35,12 @@ class StyleGAN2Trainer(BaseTrainer):
         )
 
     def _init_loss_functions(self):
-        self.loss_fn_g_adv = generator_loss_bce
-        self.loss_fn_d_adv = discriminator_loss_bce
+        self.loss_fn_g_adv = generator_loss_wgan
+        self.loss_fn_d_adv = discriminator_loss_wgan
 
     def _train_d(self, real_images, **kwargs):
         toggle_grad(self.D, True)
-        # Note: self.optimizer_D.zero_grad() is now called inside the training loop in base_trainer
-
         is_accumulation_step = self.current_iteration % self.config.gradient_accumulation_steps != 0
-
 
         d_input_real_images = real_images
         if self.ada_manager:
@@ -56,7 +53,7 @@ class StyleGAN2Trainer(BaseTrainer):
 
         g_kwargs = {
             'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9),
-            'truncation_psi': None # No truncation during training
+            'truncation_psi': None
         }
 
         with torch.no_grad():
@@ -65,27 +62,22 @@ class StyleGAN2Trainer(BaseTrainer):
         d_fake_logits = self.D(fake_images.detach())
 
         lossD_adv = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
-
-        if torch.isnan(lossD_adv):
-            print("Warning: Adversarial D loss is NaN. Skipping batch.")
-            return {"Loss_D_Adv": "nan"}
-
-        logs = {"Loss_D_Adv": lossD_adv.item()}
-        lossD = lossD_adv
-
+        gp = gradient_penalty(self.D, real_images, fake_images, self.device)
+        lossD = lossD_adv + self.config.optimizer.lambda_gp * gp
 
         if torch.isnan(lossD):
-            print("Warning: Total D loss is NaN before backward pass. Skipping update.")
-            return logs # Return logs without backward pass or optimizer step
+            print("Warning: Total D loss is NaN. Skipping batch.")
+            return {"Loss_D_Adv": "nan", "GP": "nan"}
 
-        # Normalize the loss for gradient accumulation
+        logs = {"Loss_D_Adv": lossD_adv.item(), "GP": gp.item()}
+
         lossD = lossD / self.config.gradient_accumulation_steps
         lossD.backward()
 
         if not is_accumulation_step:
             if any(torch.isnan(p.grad).any() for p in self.D.parameters() if p.grad is not None):
                 print("Warning: NaN gradients in Discriminator. Skipping optimizer step.")
-                self.optimizer_D.zero_grad() # Clear gradients even if we skip the step
+                self.optimizer_D.zero_grad()
             else:
                 self.optimizer_D.step()
                 self.optimizer_D.zero_grad()
@@ -107,10 +99,8 @@ class StyleGAN2Trainer(BaseTrainer):
 
         fake_images_for_g = self.G(z_noise_g, **g_kwargs_g)
 
-        # Augment fake images for G if ADA is used
         if self.ada_manager:
             fake_images_for_g_aug = self.ada_manager.apply_augmentations(fake_images_for_g)
-
         else:
             fake_images_for_g_aug = fake_images_for_g
 
@@ -124,7 +114,6 @@ class StyleGAN2Trainer(BaseTrainer):
         logs = {"Loss_G_Adv": lossG_adv.item()}
         lossG = lossG_adv
 
-        # Normalize the loss for gradient accumulation
         lossG = lossG / self.config.gradient_accumulation_steps
         lossG.backward()
 

@@ -16,6 +16,8 @@ class LoggingConfig:
     sample_freq_epoch: int = 1
     num_samples_to_log: int = 10
     checkpoint_freq_epoch: int = 10
+    calculate_fid: bool = True
+    fid_num_images: int = 5000
 
 
 @dataclass
@@ -25,6 +27,7 @@ class OptimizerConfig:
     d_lr: float = 2e-4
     beta1: float = 0.0 # Adam optimizer beta1 for G and D
     beta2: float = 0.99 # Adam optimizer beta2 for G and D
+    lambda_gp: float = 10.0
     # Potentially add separate betas for G and D if needed:
     # g_beta1: float = 0.0
     # g_beta2: float = 0.99
