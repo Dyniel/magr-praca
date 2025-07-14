@@ -120,16 +120,12 @@ class StyleGAN2Generator(nn.Module):
 
         return w.unsqueeze(1).repeat(1, self.num_layers_total_for_w, 1)
 
-    def forward(self, z_noise, style_mix_prob=0.9, input_is_w=False,
+    def forward(self, w, style_mix_prob=0.9, input_is_w=True,
                 truncation_psi=None, truncation_cutoff=None, w_avg=None,
-                spatial_map_g=None, z_superpixel_g=None):
+                spatial_map_g=None, z_superpixel_g=None, z_noise=None):
 
-        batch_size = z_noise.shape[0] if z_noise is not None else \
-            (w_avg.shape[0] if input_is_w and w_avg is not None else
-             (spatial_map_g.shape[0] if spatial_map_g is not None else
-              (z_superpixel_g.shape[0] if z_superpixel_g is not None else 1)))
+        batch_size = w.shape[0]
 
-        w = self._get_w(z_noise, input_is_w, z_superpixel_g)
         styles = self._get_styles(w, z_noise, style_mix_prob, input_is_w, truncation_psi, truncation_cutoff, w_avg, z_superpixel_g)
 
         x = self.initial_constant.repeat(batch_size, 1, 1, 1)

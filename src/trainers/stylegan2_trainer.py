@@ -1,10 +1,11 @@
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 
 from src.models import StyleGAN2Generator, StyleGAN2Discriminator
 from src.utils import toggle_grad
-from src.losses.adversarial import generator_loss_wgan, discriminator_loss_wgan, gradient_penalty
+from src.losses.adversarial import generator_loss_hinge, discriminator_loss_hinge, gradient_penalty
 from src.augmentations import ADAManager
 from src.trainers.base_trainer import BaseTrainer
 
@@ -16,10 +17,13 @@ class StyleGAN2Trainer(BaseTrainer):
         self.sp_latent_encoder = None
         self.w_avg = None
         if self.config.model.stylegan2_use_truncation:
-            # Placeholder for w_avg calculation
-            pass
+            z_dim = self.config.model.stylegan2_z_dim
+            zs = torch.randn(1000, z_dim, device=self.device)
+            ws = self.G.mapping_network(zs)
+            self.w_avg = ws.mean(0, keepdim=True)
         if hasattr(self.config.model, 'stylegan2_ada_target_metric_val'):
             self.ada_manager = ADAManager(self.config.model, self.device)
+        self.scaler = GradScaler()
 
     def _init_optimizers(self):
         g_params = list(self.G.parameters())
@@ -35,8 +39,8 @@ class StyleGAN2Trainer(BaseTrainer):
         )
 
     def _init_loss_functions(self):
-        self.loss_fn_g_adv = generator_loss_wgan
-        self.loss_fn_d_adv = discriminator_loss_wgan
+        self.loss_fn_g_adv = generator_loss_hinge
+        self.loss_fn_d_adv = discriminator_loss_hinge
 
     def _train_d(self, real_images, **kwargs):
         toggle_grad(self.D, True)
@@ -55,11 +59,20 @@ class StyleGAN2Trainer(BaseTrainer):
         z_noise = torch.randn(real_images.size(0), z_dim_to_use, device=self.device)
 
         g_kwargs = {
-            'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9),
-            'truncation_psi': None
+            'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.0),
+            'truncation_psi': self.config.model.stylegan2_truncation_psi if self.w_avg is not None else None,
+            'w_avg': self.w_avg
         }
 
-        fake_images = self.G(z_noise, **g_kwargs)
+        with autocast(enabled=False):
+            w = self.G.mapping_network(z_noise)
+        with autocast():
+            fake_images = self.G.forward(w, **g_kwargs)
+        fake_images = torch.nan_to_num(fake_images, nan=0.0, posinf=1.0, neginf=-1.0)
+        print("fake_images – min/max/hasnan:",
+              fake_images.min().item(),
+              fake_images.max().item(),
+              fake_images.isnan().any().item())
 
         d_fake_logits = self.D(fake_images.detach())
         print("d_fake_logits:", d_fake_logits.min().item(), d_fake_logits.max().item())
@@ -74,17 +87,16 @@ class StyleGAN2Trainer(BaseTrainer):
 
         logs = {"Loss_D_Adv": lossD_adv.item(), "GP": gp.item()}
 
-        lossD = lossD / self.config.gradient_accumulation_steps
-        with torch.autograd.set_detect_anomaly(True):
-            lossD.backward()
+        self.scaler.scale(lossD).backward()
 
         if not is_accumulation_step:
             if any(torch.isnan(p.grad).any() for p in self.D.parameters() if p.grad is not None):
                 print("Warning: NaN gradients in Discriminator. Skipping optimizer step.")
                 self.optimizer_D.zero_grad()
             else:
-                torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
-                self.optimizer_D.step()
+                torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=5.0)
+                self.scaler.step(self.optimizer_D)
+                self.scaler.update()
                 self.optimizer_D.zero_grad()
 
         logs["Loss_D_Total"] = lossD.item() * self.config.gradient_accumulation_steps
@@ -99,37 +111,43 @@ class StyleGAN2Trainer(BaseTrainer):
         z_noise_g = torch.randn(real_images.size(0), z_dim_to_use_g, device=self.device)
 
         g_kwargs_g = {
-            'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9)
+            'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.0),
+            'truncation_psi': self.config.model.stylegan2_truncation_psi if self.w_avg is not None else None,
+            'w_avg': self.w_avg
         }
 
-        fake_images_for_g = self.G(z_noise_g, **g_kwargs_g)
+        with autocast(enabled=False):
+            w_g = self.G.mapping_network(z_noise_g)
+        with autocast():
+            fake_images_for_g = self.G.forward(w_g, **g_kwargs_g)
+        fake_images_for_g = torch.nan_to_num(fake_images_for_g, nan=0.0, posinf=1.0, neginf=-1.0)
 
-        if self.ada_manager:
-            fake_images_for_g_aug = self.ada_manager.apply_augmentations(fake_images_for_g)
-        else:
-            fake_images_for_g_aug = fake_images_for_g
+        with autocast():
+            if self.ada_manager:
+                fake_images_for_g_aug = self.ada_manager.apply_augmentations(fake_images_for_g)
+            else:
+                fake_images_for_g_aug = fake_images_for_g
 
-        d_fake_logits_for_g = self.D(fake_images_for_g_aug)
+            d_fake_logits_for_g = self.D(fake_images_for_g_aug)
 
-        with torch.autograd.set_detect_anomaly(True):
             lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
 
-            if torch.isnan(lossG_adv):
-                print("Warning: Adversarial G loss is NaN. Skipping batch.")
-                return {"Loss_G_Adv": "nan"}
+        if torch.isnan(lossG_adv):
+            print("Warning: Adversarial G loss is NaN. Skipping batch.")
+            return {"Loss_G_Adv": "nan"}
 
-            logs = {"Loss_G_Adv": lossG_adv.item()}
-            lossG = lossG_adv
+        logs = {"Loss_G_Adv": lossG_adv.item()}
+        lossG = lossG_adv
 
-            lossG = lossG / self.config.gradient_accumulation_steps
-            lossG.backward()
+        self.scaler.scale(lossG).backward()
 
         if not is_accumulation_step:
             if any(torch.isnan(p.grad).any() for p in self.G.parameters() if p.grad is not None):
                 print("Warning: NaN gradients in Generator. Skipping optimizer step.")
                 self.optimizer_G.zero_grad()
             else:
-                self.optimizer_G.step()
+                self.scaler.step(self.optimizer_G)
+                self.scaler.update()
                 self.optimizer_G.zero_grad()
 
         logs["Loss_G_Total"] = lossG.item() * self.config.gradient_accumulation_steps
