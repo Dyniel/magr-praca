@@ -57,7 +57,7 @@ class ModelConfig:
     stylegan2_n_mlp: int = 8 # Number of layers in mapping network
     stylegan2_lr_mul_mapping: float = 0.01 # Learning rate multiplier for mapping network
     stylegan2_channel_multiplier: int = 1 # Channel multiplier for G and D resolutions
-    stylegan2_style_mix_prob: float = 0.9  # Probability of applying style mixing.
+    stylegan2_style_mix_prob: float = 0.0  # Probability of applying style mixing.
     stylegan2_use_truncation: bool = True  # Whether to use truncation trick during inference/sampling.
     stylegan2_truncation_psi: float = 0.7  # Truncation psi for training/sampling (if not overridden for eval).
     stylegan2_truncation_cutoff: Optional[int] = None  # Number of layers to apply truncation to (all if None or 0).
