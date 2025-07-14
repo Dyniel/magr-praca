@@ -46,7 +46,10 @@ class StyleGAN2Trainer(BaseTrainer):
         if self.ada_manager:
             d_input_real_images = self.ada_manager.apply_augmentations(real_images)
 
+        d_input_real_images.requires_grad_()
+
         d_real_logits = self.D(d_input_real_images)
+        print("d_real_logits:", d_real_logits.min().item(), d_real_logits.max().item())
 
         z_dim_to_use = self.config.model.stylegan2_z_dim
         z_noise = torch.randn(real_images.size(0), z_dim_to_use, device=self.device)
@@ -59,6 +62,7 @@ class StyleGAN2Trainer(BaseTrainer):
         fake_images = self.G(z_noise, **g_kwargs)
 
         d_fake_logits = self.D(fake_images.detach())
+        print("d_fake_logits:", d_fake_logits.min().item(), d_fake_logits.max().item())
 
         lossD_adv = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
         gp = gradient_penalty(self.D, real_images, fake_images, self.device)
@@ -104,17 +108,19 @@ class StyleGAN2Trainer(BaseTrainer):
             fake_images_for_g_aug = fake_images_for_g
 
         d_fake_logits_for_g = self.D(fake_images_for_g_aug)
-        lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
 
-        if torch.isnan(lossG_adv):
-            print("Warning: Adversarial G loss is NaN. Skipping batch.")
-            return {"Loss_G_Adv": "nan"}
+        with torch.autograd.set_detect_anomaly(True):
+            lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
 
-        logs = {"Loss_G_Adv": lossG_adv.item()}
-        lossG = lossG_adv
+            if torch.isnan(lossG_adv):
+                print("Warning: Adversarial G loss is NaN. Skipping batch.")
+                return {"Loss_G_Adv": "nan"}
 
-        lossG = lossG / self.config.gradient_accumulation_steps
-        lossG.backward()
+            logs = {"Loss_G_Adv": lossG_adv.item()}
+            lossG = lossG_adv
+
+            lossG = lossG / self.config.gradient_accumulation_steps
+            lossG.backward()
 
         if not is_accumulation_step:
             if any(torch.isnan(p.grad).any() for p in self.G.parameters() if p.grad is not None):

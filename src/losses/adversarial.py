@@ -68,6 +68,7 @@ def gradient_penalty(discriminator, real_images, fake_images, device):
 
     gradients = gradients.view(batch_size, -1)
     gradient_norm = gradients.norm(2, dim=1)
+    print("grad_norm:", gradient_norm.min().item(), gradient_norm.max().item())
     gradient_penalty = ((gradient_norm - 1) ** 2).mean()
 
     # Check for inf values, which can destabilize training.
