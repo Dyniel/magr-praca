@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 from torchvision.utils import make_grid
@@ -12,13 +11,6 @@ from PIL import Image
 from skimage.segmentation import slic
 from skimage.util import img_as_float
 
-# From legacy/gan5.py
-# ==================== UTILS ====================
-def spectral_norm(layer):
-    """Applies spectral normalization to a layer."""
-    return nn.utils.spectral_norm(layer)
-
-
 def relabel_and_clip(seg, max_labels):
     """Relabels segmentation mask and clips labels to max_labels."""
     seg, _, _ = relabel_sequential(seg)
@@ -29,11 +21,9 @@ def relabel_and_clip(seg, max_labels):
 def create_adjacency_matrix(seg_array, num_superpixels):
     """
     Creates a normalized adjacency matrix from a segmentation array.
-
     Args:
         seg_array (np.ndarray): Segmentation mask (H, W).
         num_superpixels (int): Number of superpixels (S).
-
     Returns:
         np.ndarray: Normalized adjacency matrix (S, S).
     """
@@ -44,19 +34,17 @@ def create_adjacency_matrix(seg_array, num_superpixels):
     for y in range(H):
         for x in range(W):
             current_superpixel_label = int(seg_array[y, x])
-            if current_superpixel_label >= S:  # Should not happen if relabel_and_clip was used
+            if current_superpixel_label >= S:
                 continue
 
-            # Check neighbors (up, down, left, right)
             for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 ny, nx = y + dy, x + dx
                 if 0 <= ny < H and 0 <= nx < W:
                     neighbor_superpixel_label = int(seg_array[ny, nx])
                     if neighbor_superpixel_label < S and neighbor_superpixel_label != current_superpixel_label:
                         adj[current_superpixel_label, neighbor_superpixel_label] = 1.0
-                        adj[neighbor_superpixel_label, current_superpixel_label] = 1.0 # Symmetric
+                        adj[neighbor_superpixel_label, current_superpixel_label] = 1.0
 
-    # Normalize adjacency matrix
     deg = adj.sum(axis=1)
     inv_sqrt_deg = np.zeros_like(deg)
     mask = deg > 0
@@ -284,79 +272,30 @@ except ImportError:
 
 def convert_image_to_pyg_graph(image_numpy_array_01, num_superpixels, slic_compactness=10, feature_type='mean_color'):
     """
-    Converts a single image (as NumPy array in [0,1] range) to a PyTorch Geometric Data object.
-
-    Args:
-        image_numpy_array_01 (np.ndarray): Input image as a NumPy array (H, W, C), values in [0, 1].
-        num_superpixels (int): Target number of superpixels.
-        slic_compactness (float): Compactness parameter for SLIC.
-        feature_type (str): Type of node features to extract ('mean_color').
-
-    Returns:
-        torch_geometric.data.Data: Graph object with 'x' (node features) and 'edge_index'.
-                                   Returns None if PyG or skimage.graph is not available.
+    Converts a single image to a PyTorch Geometric Data object.
     """
     if not PYG_AVAILABLE or Data is None or skgraph is None:
         raise ImportError("PyTorch Geometric or scikit-image.graph is required for graph conversion.")
 
-    # 1. SLIC Superpixels
-    # slic expects float image in range [0,1] or [-1,1], skimage.util.img_as_float handles this.
-    # Our input image_numpy_array_01 is already in [0,1]
     spx_labels = slic(image_numpy_array_01, n_segments=num_superpixels, compactness=slic_compactness, start_label=0)
-
-    # Relabel to ensure contiguous labels from 0 to N-1, where N is actual number of superpixels
-    # This is important because max(spx_labels) might be < num_superpixels
-    # And after relabel_sequential, the number of unique labels is what matters.
-    # spx_labels, _, _ = relabel_sequential(spx_labels) # gan6 did not do this, but it's safer.
-    # Let's stick to gan6 logic for now: it used spx.max() + 1 for node count.
-    # However, it also did `counts = np.bincount(spx.flatten())` which would correctly size up to max label.
-    # And features were `feats = np.zeros((n_nodes, 3))` where n_nodes = spx.max() + 1
-    # This implies labels might not be contiguous from 0.
-    # For PyG, it's generally better if node indices are 0 to N-1.
-    # Let's assume SLIC output + start_label=0 gives reasonable labels, but bincount handles gaps.
-    # The RAG construction in skimage also handles non-contiguous labels by finding unique ones.
-
     num_actual_nodes = np.max(spx_labels) + 1
 
-    # 2. Node Features (e.g., mean color)
     if feature_type == 'mean_color':
         node_features = np.zeros((num_actual_nodes, image_numpy_array_01.shape[2]), dtype=np.float32)
-        # Efficiently calculate mean color for each superpixel
-        for c in range(image_numpy_array_01.shape[2]): # Iterate over color channels
+        for c in range(image_numpy_array_01.shape[2]):
             channel_sum_per_superpixel = np.bincount(spx_labels.flatten(), weights=image_numpy_array_01[..., c].flatten(), minlength=num_actual_nodes)
             pixel_counts_per_superpixel = np.bincount(spx_labels.flatten(), minlength=num_actual_nodes)
-
-            # Avoid division by zero for superpixels that might not have any pixels (if any)
             valid_mask = pixel_counts_per_superpixel > 0
             node_features[valid_mask, c] = channel_sum_per_superpixel[valid_mask] / pixel_counts_per_superpixel[valid_mask]
     else:
         raise ValueError(f"Unsupported feature_type: {feature_type}")
 
-    # 3. Edges from Region Adjacency Graph (RAG)
-    # rag_mean_color also computes mean colors, but we did it above for flexibility.
-    # We only need edges from it.
-    # skimage.graph.rag_mean_color builds graph based on unique labels in spx_labels.
-    # The node IDs in rag.edges will correspond to these unique labels.
-    # If spx_labels are not 0..N-1 contiguous, rag will map them. We need to ensure consistency.
-    # Let's re-evaluate gan6's RAG usage:
-    # `rag = skgraph.rag_mean_color(img_np, spx)`
-    # `edges = np.array([[u, v] for u, v in rag.edges()], dtype=np.int64)`
-    # This implies node IDs `u,v` are directly from SLIC labels.
-    # So, if SLIC produces labels 0, 1, 3 (missing 2), then `rag` uses these.
-    # Features were `feats = np.zeros((spx.max() + 1, 3))`. This is fine.
-
-    rag = skgraph.rag_mean_color(image_numpy_array_01, spx_labels) # Pass image_numpy_array_01
-
-    # Edges are typically stored as [2, num_edges] in PyG
-    if len(rag.edges) > 0:
-        edge_list = np.array(list(rag.edges), dtype=np.int64).T
-    else:
-        edge_list = np.empty((2, 0), dtype=np.int64)
-
+    rag = skgraph.rag_mean_color(image_numpy_array_01, spx_labels)
+    edge_list = np.array(list(rag.edges), dtype=np.int64).T if len(rag.edges) > 0 else np.empty((2, 0), dtype=np.int64)
     edge_index = torch.from_numpy(edge_list)
     x = torch.from_numpy(node_features)
-
-    return Data(x=x, edge_index=edge_index)
+    adj = create_adjacency_matrix(spx_labels, num_actual_nodes)
+    return Data(x=x, edge_index=edge_index, adj=torch.from_numpy(adj))
 
 def generate_spatial_superpixel_map(segments_map_batch, num_channels_out, image_size, num_superpixels_total, real_images_batch_01=None):
     """
@@ -491,6 +430,17 @@ def log_image_grid_to_wandb(images, wandb_run, caption, step):
     if wandb_run:
         grid = make_grid(images)
         wandb_run.log({caption: [wandb.Image(grid, caption=caption)]}, step=step)
+
+
+def interpolate_spatial_map(spatial_map, size):
+    """
+    Interpolates a spatial map to a given size.
+    """
+    if spatial_map is None:
+        return None
+    if spatial_map.shape[-2:] != (size, size):
+        return F.interpolate(spatial_map, size=(size, size), mode='nearest')
+    return spatial_map
 
 
 print("src/utils.py created and populated.")
