@@ -17,8 +17,10 @@ class StyleGAN2Trainer(BaseTrainer):
         self.sp_latent_encoder = None
         self.w_avg = None
         if self.config.model.stylegan2_use_truncation:
-            # Placeholder for w_avg calculation
-            pass
+            z_dim = self.config.model.stylegan2_z_dim
+            zs = torch.randn(1000, z_dim, device=self.device)
+            ws = self.G.mapping_network(zs)
+            self.w_avg = ws.mean(0, keepdim=True)
         if hasattr(self.config.model, 'stylegan2_ada_target_metric_val'):
             self.ada_manager = ADAManager(self.config.model, self.device)
         self.scaler = GradScaler()
@@ -57,16 +59,21 @@ class StyleGAN2Trainer(BaseTrainer):
             z_dim_to_use = self.config.model.stylegan2_z_dim
             z_noise = torch.randn(real_images.size(0), z_dim_to_use, device=self.device)
 
-            g_kwargs = {
-                'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9),
-                'truncation_psi': None
-            }
+        g_kwargs = {
+            'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.0),
+            'truncation_psi': self.config.model.stylegan2_truncation_psi if self.w_avg is not None else None,
+            'w_avg': self.w_avg
+        }
 
-            fake_images = self.G(z_noise, **g_kwargs)
-            print("fake_images – min/max/hasnan:",
-                  fake_images.min().item(),
-                  fake_images.max().item(),
-                  fake_images.isnan().any().item())
+        with autocast(enabled=False):
+            w = self.G.mapping_network(z_noise)
+        with autocast():
+            fake_images = self.G.forward(w, **g_kwargs)
+        fake_images = torch.nan_to_num(fake_images, nan=0.0, posinf=1.0, neginf=-1.0)
+        print("fake_images – min/max/hasnan:",
+              fake_images.min().item(),
+              fake_images.max().item(),
+              fake_images.isnan().any().item())
 
 
             d_fake_logits = self.D(fake_images.detach())
@@ -106,12 +113,19 @@ class StyleGAN2Trainer(BaseTrainer):
             z_dim_to_use_g = self.config.model.stylegan2_z_dim
             z_noise_g = torch.randn(real_images.size(0), z_dim_to_use_g, device=self.device)
 
-            g_kwargs_g = {
-                'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9)
-            }
+        g_kwargs_g = {
+            'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.0),
+            'truncation_psi': self.config.model.stylegan2_truncation_psi if self.w_avg is not None else None,
+            'w_avg': self.w_avg
+        }
 
-            fake_images_for_g = self.G(z_noise_g, **g_kwargs_g)
+        with autocast(enabled=False):
+            w_g = self.G.mapping_network(z_noise_g)
+        with autocast():
+            fake_images_for_g = self.G.forward(w_g, **g_kwargs_g)
+        fake_images_for_g = torch.nan_to_num(fake_images_for_g, nan=0.0, posinf=1.0, neginf=-1.0)
 
+        with autocast():
             if self.ada_manager:
                 fake_images_for_g_aug = self.ada_manager.apply_augmentations(fake_images_for_g)
             else:
@@ -121,12 +135,12 @@ class StyleGAN2Trainer(BaseTrainer):
 
             lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
 
-            if torch.isnan(lossG_adv):
-                print("Warning: Adversarial G loss is NaN. Skipping batch.")
-                return {"Loss_G_Adv": "nan"}
+        if torch.isnan(lossG_adv):
+            print("Warning: Adversarial G loss is NaN. Skipping batch.")
+            return {"Loss_G_Adv": "nan"}
 
-            logs = {"Loss_G_Adv": lossG_adv.item()}
-            lossG = lossG_adv
+        logs = {"Loss_G_Adv": lossG_adv.item()}
+        lossG = lossG_adv
 
         self.scaler.scale(lossG).backward()
 
