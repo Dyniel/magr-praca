@@ -4,8 +4,9 @@ import torch.nn.functional as F
 
 from src.models import StyleGAN2Generator, StyleGAN2Discriminator
 from src.utils import toggle_grad
-from src.losses.adversarial import r1_penalty, generator_loss_nonsaturating, discriminator_loss_r1
+from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
 from src.augmentations import ADAManager
+from src.trainers.base_trainer import BaseTrainer
 
 class StyleGAN2Trainer(BaseTrainer):
     def _init_models(self):
@@ -34,10 +35,8 @@ class StyleGAN2Trainer(BaseTrainer):
         )
 
     def _init_loss_functions(self):
-        self.r1_gamma = self.config.r1_gamma
-        self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
-        self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
-            F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
+        self.loss_fn_g_adv = generator_loss_bce
+        self.loss_fn_d_adv = discriminator_loss_bce
 
     def _train_d(self, real_images, **kwargs):
         toggle_grad(self.D, True)
@@ -45,8 +44,6 @@ class StyleGAN2Trainer(BaseTrainer):
 
         is_accumulation_step = self.current_iteration % self.config.gradient_accumulation_steps != 0
 
-        # We need gradients for R1 penalty, but we don't want to sync across machines if we're doing DDP
-        real_images.requires_grad = (self.r1_gamma > 0)
 
         d_input_real_images = real_images
         if self.ada_manager:
@@ -76,14 +73,6 @@ class StyleGAN2Trainer(BaseTrainer):
         logs = {"Loss_D_Adv": lossD_adv.item()}
         lossD = lossD_adv
 
-        if self.r1_gamma > 0:
-            r1_loss = r1_penalty(d_real_logits, d_input_real_images, self.r1_gamma)
-            if torch.isnan(r1_loss):
-                print("R1 loss is nan. Skipping R1 penalty for this step.")
-                r1_loss = torch.tensor(0.0, device=self.device) # set to 0 if nan
-
-            lossD += r1_loss
-            logs["Loss_D_R1"] = r1_loss.item() if not torch.isnan(r1_loss) else "nan"
 
         if torch.isnan(lossD):
             print("Warning: Total D loss is NaN before backward pass. Skipping update.")
