@@ -131,33 +131,32 @@ class BaseTrainer(abc.ABC):
 
                 # ... (sample logging and checkpointing logic will be added here)
 
-            if (epoch + 1) % self.config.logging.image_log_freq == 0:
-                self.G.eval()
-                with torch.no_grad():
-                    # Generate a grid of images for a general overview
-                    z_noise_grid = torch.randn(self.config.batch_size, self.config.model.stylegan2_z_dim, device=self.device)
-                    g_kwargs = {
-                        'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9),
-                        'truncation_psi': None
-                    }
-                    fake_images_grid = self.G(z_noise_grid, **g_kwargs)
-                    if self.config.logging.use_wandb and wandb.run:
-                        log_image_grid_to_wandb(denormalize_image(fake_images_grid), wandb.run, f"Generated Images Epoch {epoch+1}", self.current_iteration)
+            self.G.eval()
+            with torch.no_grad():
+                # Generate a grid of images for a general overview
+                z_noise_grid = torch.randn(self.config.batch_size, self.config.model.stylegan2_z_dim, device=self.device)
+                g_kwargs = {
+                    'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.9),
+                    'truncation_psi': None
+                }
+                fake_images_grid = self.G(z_noise_grid, **g_kwargs)
+                if self.config.logging.use_wandb and wandb.run:
+                    log_image_grid_to_wandb(denormalize_image(fake_images_grid), wandb.run, f"Generated Images Epoch {epoch+1}", self.current_iteration)
 
-                    # Log 5 sample predictions to the table
-                    print("Logging 5 sample predictions to wandb table...")
-                    z_noise_samples = torch.randn(5, self.config.model.stylegan2_z_dim, device=self.device)
-                    sample_images = self.G(z_noise_samples, **g_kwargs)
-                    denormalized_samples = denormalize_image(sample_images)
-                    if self.config.logging.use_wandb and wandb.run:
-                        for i in range(denormalized_samples.size(0)):
-                            self.sample_predictions_table.add_data(
-                                self.current_epoch,
-                                self.current_iteration,
-                                wandb.Image(denormalized_samples[i])
-                            )
+                # Log 5 sample predictions to the table
+                print("Logging 5 sample predictions to wandb table...")
+                z_noise_samples = torch.randn(5, self.config.model.stylegan2_z_dim, device=self.device)
+                sample_images = self.G(z_noise_samples, **g_kwargs)
+                denormalized_samples = denormalize_image(sample_images)
+                if self.config.logging.use_wandb and wandb.run:
+                    for i in range(denormalized_samples.size(0)):
+                        self.sample_predictions_table.add_data(
+                            self.current_epoch,
+                            self.current_iteration,
+                            wandb.Image(denormalized_samples[i])
+                        )
 
-                self.G.train()
+            self.G.train()
 
             print(f"Epoch {epoch+1} completed.")
 
