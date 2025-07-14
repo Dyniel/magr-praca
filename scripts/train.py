@@ -15,6 +15,12 @@ def main():
 
     # Start with the structured default config
     conf = OmegaConf.structured(BaseConfig)
+    conf.logging.use_wandb = False
+    conf.dataset_path = 'dummy_dataset/images'
+    conf.logging.use_wandb = False
+    conf.dataset_path = "dummy_images/train"
+    conf.logging.use_wandb = False
+    conf.logging.use_wandb = False
 
     # Load from YAML if provided
     if args.config_file:
