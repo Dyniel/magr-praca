@@ -68,6 +68,7 @@ class StyleGAN2Trainer(BaseTrainer):
                   fake_images.max().item(),
                   fake_images.isnan().any().item())
 
+
             d_fake_logits = self.D(fake_images.detach())
             print("d_fake_logits:", d_fake_logits.min().item(), d_fake_logits.max().item())
 
