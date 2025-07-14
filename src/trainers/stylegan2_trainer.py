@@ -16,11 +16,7 @@ class StyleGAN2Trainer(BaseTrainer):
         self.E = None
         self.sp_latent_encoder = None
         self.w_avg = None
-        if self.config.model.stylegan2_use_truncation:
-            z_dim = self.config.model.stylegan2_z_dim
-            zs = torch.randn(1000, z_dim, device=self.device)
-            ws = self.G.mapping_network(zs)
-            self.w_avg = ws.mean(0, keepdim=True)
+
         if hasattr(self.config.model, 'stylegan2_ada_target_metric_val'):
             self.ada_manager = ADAManager(self.config.model, self.device)
         self.scaler = GradScaler()
@@ -65,10 +61,12 @@ class StyleGAN2Trainer(BaseTrainer):
             'w_avg': self.w_avg
         }
 
-        with autocast(enabled=False):
-            w = self.G.mapping_network(z_noise)
-        with autocast():
-            fake_images = self.G.forward(w, **g_kwargs)
+        w = self.G.mapping_network(z_noise)
+        if self.w_avg is None:
+            self.w_avg = w.mean(dim=0, keepdim=True)
+        else:
+            self.w_avg = self.w_avg * 0.995 + w.mean(dim=0, keepdim=True) * 0.005
+        fake_images = self.G.forward(w, **g_kwargs)
         fake_images = torch.nan_to_num(fake_images, nan=0.0, posinf=1.0, neginf=-1.0)
         print("fake_images – min/max/hasnan:",
               fake_images.min().item(),
@@ -89,7 +87,8 @@ class StyleGAN2Trainer(BaseTrainer):
 
         logs = {"Loss_D_Adv": lossD_adv.item(), "GP": gp.item()}
 
-        self.scaler.scale(lossD).backward()
+        lossD.backward()
+
 
         if not is_accumulation_step:
             if any(torch.isnan(p.grad).any() for p in self.D.parameters() if p.grad is not None):
@@ -97,8 +96,8 @@ class StyleGAN2Trainer(BaseTrainer):
                 self.optimizer_D.zero_grad()
             else:
                 torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=5.0)
-                self.scaler.step(self.optimizer_D)
-                self.scaler.update()
+                self.optimizer_D.step()
+
                 self.optimizer_D.zero_grad()
 
         logs["Loss_D_Total"] = lossD.item() * self.config.gradient_accumulation_steps
@@ -119,10 +118,9 @@ class StyleGAN2Trainer(BaseTrainer):
             'w_avg': self.w_avg
         }
 
-        with autocast(enabled=False):
-            w_g = self.G.mapping_network(z_noise_g)
-        with autocast():
-            fake_images_for_g = self.G.forward(w_g, **g_kwargs_g)
+        w_g = self.G.mapping_network(z_noise_g)
+        fake_images_for_g = self.G.forward(w_g, **g_kwargs_g)
+
         fake_images_for_g = torch.nan_to_num(fake_images_for_g, nan=0.0, posinf=1.0, neginf=-1.0)
 
         with autocast():
@@ -133,7 +131,8 @@ class StyleGAN2Trainer(BaseTrainer):
 
             d_fake_logits_for_g = self.D(fake_images_for_g_aug)
 
-            lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
+        lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
+
 
         if torch.isnan(lossG_adv):
             print("Warning: Adversarial G loss is NaN. Skipping batch.")
@@ -142,7 +141,8 @@ class StyleGAN2Trainer(BaseTrainer):
         logs = {"Loss_G_Adv": lossG_adv.item()}
         lossG = lossG_adv
 
-        self.scaler.scale(lossG).backward()
+        lossG.backward()
+
 
         if not is_accumulation_step:
             if any(torch.isnan(p.grad).any() for p in self.G.parameters() if p.grad is not None):
