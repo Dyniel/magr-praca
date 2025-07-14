@@ -6,6 +6,8 @@ from src.trainers.base_trainer import BaseTrainer
 from src.models import StyleGAN3Generator, StyleGAN3Discriminator
 from src.utils import toggle_grad
 from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
+from src.trainers.base_trainer import BaseTrainer
+
 
 class StyleGAN3Trainer(BaseTrainer):
     def _init_models(self):

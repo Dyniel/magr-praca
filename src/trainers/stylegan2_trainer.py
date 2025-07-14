@@ -6,6 +6,7 @@ from src.models import StyleGAN2Generator, StyleGAN2Discriminator
 from src.utils import toggle_grad
 from src.losses.adversarial import generator_loss_bce, discriminator_loss_bce
 from src.augmentations import ADAManager
+from src.trainers.base_trainer import BaseTrainer
 
 class StyleGAN2Trainer(BaseTrainer):
     def _init_models(self):
