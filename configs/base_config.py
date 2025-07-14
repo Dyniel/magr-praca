@@ -52,7 +52,7 @@ class ModelConfig:
     stylegan2_w_dim: int = 512
     stylegan2_n_mlp: int = 8 # Number of layers in mapping network
     stylegan2_lr_mul_mapping: float = 0.01 # Learning rate multiplier for mapping network
-    stylegan2_channel_multiplier: int = 2 # Channel multiplier for G and D resolutions
+    stylegan2_channel_multiplier: int = 1 # Channel multiplier for G and D resolutions
     stylegan2_style_mix_prob: float = 0.9  # Probability of applying style mixing.
     stylegan2_use_truncation: bool = True  # Whether to use truncation trick during inference/sampling.
     stylegan2_truncation_psi: float = 0.7  # Truncation psi for training/sampling (if not overridden for eval).
@@ -85,7 +85,7 @@ class ModelConfig:
     stylegan3_w_dim: int = 512
     stylegan3_n_mlp: int = 8
     stylegan3_lr_mul_mapping: float = 0.01
-    stylegan3_channel_multiplier: int = 2
+    stylegan3_channel_multiplier: int = 1
     stylegan3_fir_kernel: list[int] = field(default_factory=lambda: [1,3,3,1]) # Basic FIR kernel for up/downsampling (simplified)
     # stylegan3_magnitude_ema_beta: float = 0.5 # For magnitude-based EMA in some variants
 
@@ -137,7 +137,7 @@ class ModelConfig:
 
     # For gan6_gat_cnn (already superpixel based) - ablation might mean zeroing graph embedding
     gan6_gat_cnn_use_null_graph_embedding: bool = False # Example ablation for gan6
-    projectedgan_d_channel_multiplier: int = 2
+    projectedgan_d_channel_multiplier: int = 1
     projectedgan_blur_kernel: list[int] = field(default_factory=lambda: [1,3,3,1])
     projectedgan_feature_extractor_name: str = "resnet50" # e.g., "resnet50", "efficientnet_b0"
     # projectedgan_feature_extractor_path: Optional[str] = None # Optional path to custom weights
@@ -208,7 +208,7 @@ class BaseConfig:
     # --- FID Configuration (kept separate for now or could be part of LoggingConfig) ---
     # fid_incep_path: str = "path/to/inception_v3_fid.pt" # Not used if using pytorch-fid's default
     fid_num_images: int = 5000 # Number of real/fake images to use for FID
-    fid_batch_size: int = 32   # Batch size for generating images for FID
+    fid_batch_size: int = 2   # Batch size for generating images for FID
     fid_freq_epoch: int = 5    # How often (in epochs) to calculate FID. Can be expensive.
     # path_to_real_images_for_fid: str = None # Optional: path to a pre-selected dir of real images for FID consistency. If None, uses current dataset.
     # enable_fid_calculation: bool = False # Set to True in experiment YAML to enable

@@ -1,105 +1,103 @@
-import math
 import torch
+import torch.optim as optim
+import torch.nn.functional as F
 import torch.nn as nn
-import torchvision.models as tv_models
-from torchvision.models.feature_extraction import create_feature_extractor
 
-from src.models.stylegan2 import StyleGAN2Generator
-from src.models.blocks import EqualizedConv2d, ConvBlock, EqualizedLinear
+from src.trainers.base_trainer import BaseTrainer
+from src.models import ProjectedGANGenerator, ProjectedGANDiscriminator, FeatureExtractor
+from src.utils import toggle_grad, denormalize_image
+from src.losses.adversarial import r1_penalty, generator_loss_nonsaturating, discriminator_loss_r1
 
+class ProjectedGANTrainer(BaseTrainer):
+    def _init_models(self):
+        self.G = ProjectedGANGenerator(self.config).to(self.device)
+        self.D = ProjectedGANDiscriminator(self.config).to(self.device)
+        self.E = None
+        self.sp_latent_encoder = None
+        self.feature_extractor = FeatureExtractor(
+            model_name=self.config.model.projectedgan_feature_extractor_name,
+            layers_to_extract=self.config.model.projectedgan_feature_layers_to_extract,
+            pretrained=True,
+            requires_grad=False
+        ).to(self.device).eval()
 
-class FeatureExtractor(nn.Module):
-    def __init__(self, model_name="resnet50", layers_to_extract=None, pretrained=True, requires_grad=False):
-        super().__init__()
-        if model_name == "resnet50":
-            model = tv_models.resnet50(weights=tv_models.ResNet50_Weights.IMAGENET1K_V1 if pretrained else None)
-            if layers_to_extract is None:
-                layers_to_extract = {
-                    'relu': 'stem_relu',
-                    'layer1': 'layer1_out',
-                    'layer2': 'layer2_out',
-                    'layer3': 'layer3_out',
-                    'layer4': 'layer4_out',
-                }
-        elif model_name == "efficientnet_b0":
-            model = tv_models.efficientnet_b0(
-                weights=tv_models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None)
-            if layers_to_extract is None:
-                layers_to_extract = {
-                    'features.0': 'eff_feat0',
-                    'features.2': 'eff_feat1',
-                    'features.3': 'eff_feat2',
-                    'features.5': 'eff_feat3',
-                    'features.8': 'eff_feat_final_conv',
-                }
-        else:
-            raise ValueError(f"Unsupported feature_extractor model_name: {model_name}")
+    def _init_optimizers(self):
+        g_params = list(self.G.parameters())
+        self.optimizer_G = optim.Adam(
+            g_params,
+            lr=self.config.optimizer.g_lr,
+            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
+        )
+        self.optimizer_D = optim.Adam(
+            self.D.parameters(),
+            lr=self.config.optimizer.d_lr,
+            betas=(self.config.optimizer.beta1, self.config.optimizer.beta2)
+        )
 
-        self.feature_extractor = create_feature_extractor(model, return_nodes=layers_to_extract)
+    def _init_loss_functions(self):
+        self.r1_gamma = self.config.r1_gamma
+        self.loss_fn_g_adv = lambda d_fake_logits: F.softplus(-d_fake_logits).mean()
+        self.loss_fn_d_adv = lambda d_real_logits, d_fake_logits: \
+            F.softplus(d_fake_logits).mean() + F.softplus(-d_real_logits).mean()
+        self.loss_fn_g_feat_match = nn.MSELoss()
 
-        if not requires_grad:
-            for param in self.feature_extractor.parameters():
-                param.requires_grad = False
-            self.feature_extractor.eval()
+    def _train_d(self, real_images, **kwargs):
+        toggle_grad(self.D, True)
+        self.optimizer_D.zero_grad()
 
-    def forward(self, x):
-        return self.feature_extractor(x)
+        real_images.requires_grad = (self.r1_gamma > 0)
+        d_real_logits = self.D(real_images)
 
+        z_dim_to_use = self.config.model.stylegan2_z_dim # ProjectedGAN uses StyleGAN2's z_dim
+        z_noise = torch.randn(real_images.size(0), z_dim_to_use, device=self.device)
 
-class ProjectedGANDiscriminator(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config_model = config.model
-        self.image_size = config.image_size
+        with torch.no_grad():
+            fake_images = self.G(z_noise)
 
-        self.d_channel_multiplier = self.config_model.projectedgan_d_channel_multiplier
-        self.d_channels = {
-            4: 512, 8: 512, 16: 256 * self.d_channel_multiplier, 32: 128 * self.d_channel_multiplier,
-            64: 64 * self.d_channel_multiplier, 128: 32 * self.d_channel_multiplier,
-            256: 16 * self.d_channel_multiplier,
-        }
-        self.log_size = int(math.log2(self.image_size))
+        d_fake_logits = self.D(fake_images.detach())
 
-        d_convs = []
-        pgd_from_rgb_in_channels = 3
-        if self.config_model.projectedgan_d_spatial_cond:
-            pgd_from_rgb_in_channels += self.config_model.superpixel_spatial_map_channels_d
+        lossD = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
+        logs = {"Loss_D_Adv": lossD.item()}
 
-        d_convs.append(
-            EqualizedConv2d(pgd_from_rgb_in_channels, self.d_channels[self.image_size], 1, activation='lrelu'))
+        if self.r1_gamma > 0:
+            penalty = r1_penalty(d_real_logits, real_images, self.r1_gamma)
+            lossD += penalty
+            logs["Loss_D_R1"] = penalty.item()
 
-        in_ch = self.d_channels[self.image_size]
-        for i in range(self.log_size, 2, -1):
-            out_ch = self.d_channels[2 ** (i - 1)]
-            d_convs.append(
-                ConvBlock(in_ch, out_ch, 3, downsample=True, blur_kernel=self.config_model.projectedgan_blur_kernel))
-            in_ch = out_ch
+        lossD.backward()
+        self.optimizer_D.step()
+        logs["Loss_D_Total"] = lossD.item()
+        toggle_grad(self.D, False)
+        return logs
 
-        d_convs.append(ConvBlock(in_ch, self.d_channels[4], 3))
-        self.d_cnn_path = nn.Sequential(*d_convs)
+    def _train_g(self, real_images, **kwargs):
+        toggle_grad(self.G, True)
+        self.optimizer_G.zero_grad()
 
-        self.final_d_conv = EqualizedConv2d(self.d_channels[4], self.d_channels[4], 4, padding=0,
-                                            activation='lrelu')
-        self.final_d_flatten = nn.Flatten()
-        self.final_d_linear = EqualizedLinear(self.d_channels[4], 1)
+        z_dim_to_use_g = self.config.model.stylegan2_z_dim
+        z_noise_g = torch.randn(real_images.size(0), z_dim_to_use_g, device=self.device)
 
-    def forward(self, image_for_d_path, spatial_map_d=None):
-        input_to_d_cnn = image_for_d_path
-        if self.config_model.projectedgan_d_spatial_cond and spatial_map_d is not None:
-            if image_for_d_path.shape[2:] != spatial_map_d.shape[2:]:
-                raise ValueError(
-                    f"ProjectedGAN D: image shape {image_for_d_path.shape} and spatial_map_d shape {spatial_map_d.shape} H,W mismatch.")
-            input_to_d_cnn = torch.cat([image_for_d_path, spatial_map_d], dim=1)
+        fake_images_for_g = self.G(z_noise_g)
+        d_fake_logits_for_g = self.D(fake_images_for_g)
 
-        d_features = self.d_cnn_path(input_to_d_cnn)
-        h = self.final_d_conv(d_features)
-        h = self.final_d_flatten(h)
-        logit = self.final_d_linear(h)
+        lossG_adv = self.loss_fn_g_adv(d_fake_logits_for_g)
+        logs = {"Loss_G_Adv": lossG_adv.item()}
+        lossG = lossG_adv
 
-        return logit.squeeze(1)
+        real_01 = denormalize_image(real_images)
+        fake_01 = denormalize_image(fake_images_for_g)
+        real_feats_dict = self.feature_extractor(real_01)
+        fake_feats_dict = self.feature_extractor(fake_01)
 
+        lossG_feat = 0.0
+        for key in real_feats_dict:
+            lossG_feat += self.loss_fn_g_feat_match(fake_feats_dict[key], real_feats_dict[key].detach())
+        lossG += self.config.model.projectedgan_feature_matching_loss_weight * lossG_feat
+        logs["Loss_G_FeatMatch"] = lossG_feat.item() if isinstance(lossG_feat, torch.Tensor) else lossG_feat
 
-class ProjectedGANGenerator(StyleGAN2Generator):
-    def __init__(self, config):
-        super().__init__(config)
-        print("Initialized ProjectedGANGenerator (based on StyleGAN2Generator).")
+        lossG.backward()
+        self.optimizer_G.step()
+        logs["Loss_G_Total"] = lossG.item()
+
+        toggle_grad(self.G, False)
+        return logs

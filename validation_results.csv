@@ -1,4 +1,4 @@
 model,status
-test_stylegan2_unconditioned,success
-test_stylegan3_unconditioned,success
-test_projectedgan_unconditioned,success
+test_stylegan2_unconditioned,failed
+test_stylegan3_unconditioned,failed
+test_projectedgan_unconditioned,failed

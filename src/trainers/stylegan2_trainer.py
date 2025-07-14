@@ -2,7 +2,6 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
-from src.trainers.base_trainer import BaseTrainer
 from src.models import StyleGAN2Generator, StyleGAN2Discriminator
 from src.utils import toggle_grad
 from src.losses.adversarial import r1_penalty, generator_loss_nonsaturating, discriminator_loss_r1
