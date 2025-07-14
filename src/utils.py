@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
 import wandb
 from torchvision.utils import make_grid
 import numpy as np
