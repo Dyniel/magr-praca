@@ -6,28 +6,21 @@ from omegaconf import OmegaConf
 import abc
 
 from src.data_loader import get_dataloader
-from src.utils import denormalize_image, generate_spatial_superpixel_map, calculate_mean_superpixel_features, toggle_grad, log_image_grid_to_wandb
+from src.utils import (
+    denormalize_image,
+    generate_spatial_superpixel_map,
+    calculate_mean_superpixel_features,
+    toggle_grad,
+    log_image_grid_to_wandb,
+    interpolate_spatial_map,
+)
 from src.models.superpixel_encoder import SuperpixelLatentEncoder
 from src.losses.adversarial import r1_penalty
 
 class BaseTrainer(abc.ABC):
     def __init__(self, config):
-        if hasattr(config, 'logging') and config.logging.use_wandb and config.logging.wandb_project_name:
-            wandb.init(
-                project=config.logging.wandb_project_name,
-                entity=config.logging.wandb_entity,
-                name=config.logging.wandb_run_name,
-                config=OmegaConf.to_container(config, resolve=True)
-            )
-        elif hasattr(config, 'use_wandb') and config.use_wandb:
-            print("Warning: 'logging' attribute not found in config, but 'use_wandb' is true. Attempting legacy WandB init.")
-            wandb.init(
-                project=getattr(config, 'wandb_project_name', 'default_project'),
-                name=getattr(config, 'wandb_run_name', 'default_run'),
-                config=OmegaConf.to_container(config, resolve=True)
-            )
-
         self.config = OmegaConf.to_object(config)
+        self._init_wandb()
 
         if self.config.device == "cuda" and not torch.cuda.is_available():
             print("CUDA specified in config but not available. Falling back to CPU.")
@@ -44,16 +37,24 @@ class BaseTrainer(abc.ABC):
         self._init_models()
         self._init_optimizers()
         self._init_loss_functions()
+        self._watch_models()
 
+    def _init_wandb(self):
+        if hasattr(self.config, 'logging') and self.config.logging.use_wandb:
+            wandb.init(
+                project=self.config.logging.wandb_project_name,
+                entity=self.config.logging.wandb_entity,
+                name=self.config.logging.wandb_run_name,
+                config=OmegaConf.to_container(self.config, resolve=True)
+            )
+
+    def _watch_models(self):
         if wandb.run is not None:
             if hasattr(self.config, 'logging'):
                 if hasattr(self, 'G') and self.G is not None:
                     wandb.watch(self.G, log="all", log_freq=self.config.logging.wandb_watch_freq_g)
                 if hasattr(self, 'D') and self.D is not None:
                     wandb.watch(self.D, log="all", log_freq=self.config.logging.wandb_watch_freq_d)
-            elif hasattr(self.config, 'use_wandb') and self.config.use_wandb:
-                if hasattr(self, 'G') and self.G is not None: wandb.watch(self.G, log="all")
-                if hasattr(self, 'D') and self.D is not None: wandb.watch(self.D, log="all")
 
     @abc.abstractmethod
     def _init_models(self):
@@ -128,7 +129,7 @@ class BaseTrainer(abc.ABC):
 
                 # ... (sample logging and checkpointing logic will be added here)
 
-            if (epoch + 1) % 10 == 0:
+            if (epoch + 1) % self.config.logging.image_log_freq == 0:
                 self.G.eval()
                 with torch.no_grad():
                     z_noise = torch.randn(self.config.batch_size, self.config.model.stylegan2_z_dim, device=self.device)
@@ -177,10 +178,7 @@ class BaseTrainer(abc.ABC):
                 spatial_map_g = generate_spatial_superpixel_map(
                     segments_map, self.config.model.superpixel_spatial_map_channels_g,
                     self.config.image_size, self.config.num_superpixels, real_images_01).to(self.device)
-                if self.model_architecture in ["stylegan2", "stylegan3", "projected_gan", "dcgan"] and \
-                   hasattr(self.config.model, "superpixel_spatial_map_channels_g") and self.config.model.superpixel_spatial_map_channels_g > 0 and \
-                   spatial_map_g is not None and spatial_map_g.shape[-1] != 4:
-                     spatial_map_g = F.interpolate(spatial_map_g, size=(4,4), mode='nearest')
+                spatial_map_g = interpolate_spatial_map(spatial_map_g, size=4)
 
             if d_spatial_active:
                 spatial_map_d = generate_spatial_superpixel_map(

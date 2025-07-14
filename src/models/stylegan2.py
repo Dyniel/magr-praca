@@ -75,13 +75,50 @@ class StyleGAN2Generator(nn.Module):
         self.blur_kernel_default = [1, 3, 3, 1]
         self.noises_fixed = None
 
-    def w_to_styles(self, w, num_total_layers_for_w):
-        if w.ndim == 2:
-            return w.unsqueeze(1).repeat(1, num_total_layers_for_w, 1)
-        elif w.ndim == 3 and w.shape[1] == num_total_layers_for_w:
-            return w
+    def _get_w(self, z_noise, input_is_w, z_superpixel_g):
+        current_z = z_noise
+        if self.config_model.stylegan2_g_latent_cond and z_superpixel_g is not None:
+            if current_z is None and input_is_w:
+                print("Warning (StyleGAN2 G): Latent superpixel conditioning (C2) requested but z_noise is None (input_is_w=True). C2 skipped.")
+            elif current_z is not None:
+                if current_z.ndim == 4 and current_z.shape[2:] == (1, 1):
+                    current_z = current_z.squeeze(-1).squeeze(-1)
+                current_z = torch.cat([current_z, z_superpixel_g], dim=1)
+
+        if not input_is_w:
+            if current_z is None:
+                raise ValueError("StyleGAN2 G: z_noise (current_z) is None and input_is_w is False.")
+            return self.mapping_network(current_z)
         else:
-            raise ValueError(f"w has incompatible shape: {w.shape}")
+            if current_z is not None and self.config_model.stylegan2_g_latent_cond and z_superpixel_g is not None:
+                print("Warning/Info (StyleGAN2 G): input_is_w=True. Assuming z_noise arg is actually W. Latent superpixel conditioning (C2) might not behave as expected if z_noise was not the initial Z.")
+            return current_z
+
+    def _get_styles(self, w, z_noise, style_mix_prob, input_is_w, truncation_psi, truncation_cutoff, w_avg, z_superpixel_g):
+        if truncation_psi is not None and w_avg is not None:
+            w_broadcast = w.unsqueeze(1).repeat(1, self.num_layers_total_for_w, 1) if w.ndim == 2 else w
+            if truncation_cutoff is None:
+                return w_avg + truncation_psi * (w_broadcast - w_avg)
+            else:
+                w_前半 = w_avg + truncation_psi * (w_broadcast[:, :truncation_cutoff] - w_avg)
+                w_後半 = w_broadcast[:, truncation_cutoff:]
+                return torch.cat([w_前半, w_後半], dim=1)
+
+        if self.training and style_mix_prob > 0 and torch.rand(()).item() < style_mix_prob:
+            if input_is_w:
+                print("Warning: StyleGAN2 G received input_is_w=True with style_mix_prob > 0. Style mixing skipped.")
+                return w.unsqueeze(1).repeat(1, self.num_layers_total_for_w, 1)
+
+            z2 = torch.randn_like(z_noise)
+            if self.config_model.stylegan2_g_latent_cond and z_superpixel_g is not None:
+                z2 = torch.cat([z2, z_superpixel_g], dim=1)
+            w2 = self.mapping_network(z2)
+            mix_cutoff = torch.randint(1, self.num_layers_total_for_w, (1,)).item()
+            w_part1 = w.unsqueeze(1).repeat(1, mix_cutoff, 1)
+            w_part2 = w2.unsqueeze(1).repeat(1, self.num_layers_total_for_w - mix_cutoff, 1)
+            return torch.cat([w_part1, w_part2], dim=1)
+
+        return w.unsqueeze(1).repeat(1, self.num_layers_total_for_w, 1)
 
     def forward(self, z_noise, style_mix_prob=0.9, input_is_w=False,
                 truncation_psi=None, truncation_cutoff=None, w_avg=None,
@@ -92,53 +129,8 @@ class StyleGAN2Generator(nn.Module):
              (spatial_map_g.shape[0] if spatial_map_g is not None else
               (z_superpixel_g.shape[0] if z_superpixel_g is not None else 1)))
 
-        current_z = z_noise
-        if self.config_model.stylegan2_g_latent_cond and z_superpixel_g is not None:
-            if current_z is None and input_is_w:
-                print("Warning (StyleGAN2 G): Latent superpixel conditioning (C2) requested but z_noise is None (input_is_w=True). C2 skipped.")
-            elif current_z is not None:
-                if current_z.ndim == 4 and current_z.shape[2:] == (1, 1): current_z = current_z.squeeze(-1).squeeze(-1)
-                current_z = torch.cat([current_z, z_superpixel_g], dim=1)
-
-        if not input_is_w:
-            if current_z is None:
-                raise ValueError("StyleGAN2 G: z_noise (current_z) is None and input_is_w is False.")
-            w = self.mapping_network(current_z)
-        else:
-            if current_z is not None and self.config_model.stylegan2_g_latent_cond and z_superpixel_g is not None:
-                print("Warning/Info (StyleGAN2 G): input_is_w=True. Assuming z_noise arg is actually W. Latent superpixel conditioning (C2) might not behave as expected if z_noise was not the initial Z.")
-                w = current_z
-            else:
-                w = z_noise
-
-        if truncation_psi is not None and w_avg is not None:
-            if w.ndim == 2:
-                w_broadcast = w.unsqueeze(1).repeat(1, self.num_layers_total_for_w, 1)
-            else:
-                w_broadcast = w
-            if truncation_cutoff is None:
-                w_truncated = w_avg + truncation_psi * (w_broadcast - w_avg)
-            else:
-                w_前半 = w_avg + truncation_psi * (w_broadcast[:, :truncation_cutoff] - w_avg)
-                w_後半 = w_broadcast[:, truncation_cutoff:]
-                w_truncated = torch.cat([w_前半, w_後半], dim=1)
-            styles = w_truncated
-        else:
-            if self.training and style_mix_prob > 0 and torch.rand(()).item() < style_mix_prob:
-                if input_is_w:
-                    print("Warning: StyleGAN2 G received input_is_w=True with style_mix_prob > 0. Style mixing skipped.")
-                    styles = self.w_to_styles(w, self.num_layers_total_for_w)
-                else:
-                    z2 = torch.randn_like(z_noise)
-                    if self.config_model.stylegan2_g_latent_cond and z_superpixel_g is not None:
-                        z2 = torch.cat([z2, z_superpixel_g], dim=1)
-                    w2 = self.mapping_network(z2)
-                    mix_cutoff = torch.randint(1, self.num_layers_total_for_w, (1,)).item()
-                    w_part1 = w.unsqueeze(1).repeat(1, mix_cutoff, 1)
-                    w_part2 = w2.unsqueeze(1).repeat(1, self.num_layers_total_for_w - mix_cutoff, 1)
-                    styles = torch.cat([w_part1, w_part2], dim=1)
-            else:
-                styles = self.w_to_styles(w, self.num_layers_total_for_w)
+        w = self._get_w(z_noise, input_is_w, z_superpixel_g)
+        styles = self._get_styles(w, z_noise, style_mix_prob, input_is_w, truncation_psi, truncation_cutoff, w_avg, z_superpixel_g)
 
         x = self.initial_constant.repeat(batch_size, 1, 1, 1)
         if self.config_model.stylegan2_g_spatial_cond and spatial_map_g is not None:
