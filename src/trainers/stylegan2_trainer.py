@@ -52,11 +52,12 @@ class StyleGAN2Trainer(BaseTrainer):
 
         d_input_real_images.requires_grad_()
 
-        d_real_logits = self.D(d_input_real_images)
-        print("d_real_logits:", d_real_logits.min().item(), d_real_logits.max().item())
+        with autocast():
+            d_real_logits = self.D(d_input_real_images)
+            print("d_real_logits:", d_real_logits.min().item(), d_real_logits.max().item())
 
-        z_dim_to_use = self.config.model.stylegan2_z_dim
-        z_noise = torch.randn(real_images.size(0), z_dim_to_use, device=self.device)
+            z_dim_to_use = self.config.model.stylegan2_z_dim
+            z_noise = torch.randn(real_images.size(0), z_dim_to_use, device=self.device)
 
         g_kwargs = {
             'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.0),
@@ -74,12 +75,13 @@ class StyleGAN2Trainer(BaseTrainer):
               fake_images.max().item(),
               fake_images.isnan().any().item())
 
-        d_fake_logits = self.D(fake_images.detach())
-        print("d_fake_logits:", d_fake_logits.min().item(), d_fake_logits.max().item())
 
-        lossD_adv = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
-        gp = gradient_penalty(self.D, real_images, fake_images, self.device)
-        lossD = lossD_adv + self.config.optimizer.lambda_gp * gp
+            d_fake_logits = self.D(fake_images.detach())
+            print("d_fake_logits:", d_fake_logits.min().item(), d_fake_logits.max().item())
+
+            lossD_adv = self.loss_fn_d_adv(d_real_logits, d_fake_logits)
+            gp = gradient_penalty(self.D, real_images, fake_images, self.device)
+            lossD = lossD_adv + self.config.optimizer.lambda_gp * gp
 
         if torch.isnan(lossD):
             print("Warning: Total D loss is NaN. Skipping batch.")
@@ -107,8 +109,9 @@ class StyleGAN2Trainer(BaseTrainer):
         toggle_grad(self.G, True)
         is_accumulation_step = self.current_iteration % self.config.gradient_accumulation_steps != 0
 
-        z_dim_to_use_g = self.config.model.stylegan2_z_dim
-        z_noise_g = torch.randn(real_images.size(0), z_dim_to_use_g, device=self.device)
+        with autocast():
+            z_dim_to_use_g = self.config.model.stylegan2_z_dim
+            z_noise_g = torch.randn(real_images.size(0), z_dim_to_use_g, device=self.device)
 
         g_kwargs_g = {
             'style_mix_prob': getattr(self.config.model, 'stylegan2_style_mix_prob', 0.0),
